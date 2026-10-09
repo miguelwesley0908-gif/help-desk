@@ -1,6 +1,8 @@
 const CATEGORIES = ["TI", "Infraestrutura", "Facilities", "RH", "Suprimentos"];
 const PRIORITIES = ["baixa", "media", "alta", "urgente"];
 const STATUSES = ["aberto", "andamento", "aguardando", "resolvido", "encerrado"];
+const BOOKING_TIME_ZONE = "America/Sao_Paulo";
+const BOOKING_DURATIONS = [30, 60, 90, 120];
 const LABELS = {
   baixa: "Baixa", media: "Média", alta: "Alta", urgente: "Urgente",
   aberto: "Aberto", andamento: "Em andamento", aguardando: "Aguardando",
@@ -9,10 +11,18 @@ const LABELS = {
 };
 
 let db = null;
-let state = { user: null, offices: [], users: [], tickets: [] };
+let state = { user: null, offices: [], users: [], tickets: [], rooms: [], bookings: [], busy: [], reservationsReady: false };
+let reservationDate = dateInBookingZone();
+let reservationDuration = 60;
+let reservationOfficeId = null;
+let adminBookingQuery = "";
+let adminBookingLawyerId = "";
+let selectedSlot = null;
+let availabilityRequest = 0;
 let route = parseHash();
 let flashError = "";
 let flashSuccess = "";
+let keepSuccessOnNavigation = false;
 let loading = true;
 
 function parseHash() {
@@ -21,10 +31,48 @@ function parseHash() {
   return { name: parts[0] || "login", id: parts[1] || null };
 }
 
-function go(path) { location.hash = path; }
+function go(path, keepSuccess = false) {
+  keepSuccessOnNavigation = keepSuccess;
+  location.hash = path;
+}
 function now() { return new Date().toISOString(); }
 function formatDate(value) {
   return new Date(value).toLocaleString("pt-BR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+function bookingParts(value) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: BOOKING_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(value);
+  return Object.fromEntries(parts.map((part) => [part.type, part.value]));
+}
+function dateInBookingZone(value = new Date()) {
+  const part = bookingParts(value);
+  return `${part.year}-${part.month}-${part.day}`;
+}
+function bookingLocalToIso(date, time) {
+  const [year, month, day] = date.split("-").map(Number);
+  const [hour, minute] = time.split(":").map(Number);
+  const target = Date.UTC(year, month - 1, day, hour, minute);
+  let instant = target;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const part = bookingParts(new Date(instant));
+    const observed = Date.UTC(Number(part.year), Number(part.month) - 1, Number(part.day), Number(part.hour), Number(part.minute));
+    instant += target - observed;
+  }
+  const part = bookingParts(new Date(instant));
+  if (`${part.year}-${part.month}-${part.day} ${part.hour}:${part.minute}` !== `${date} ${time}`) {
+    throw new Error("Horário inválido para o fuso de Brasília.");
+  }
+  return new Date(instant).toISOString();
+}
+function bookingTime(value) {
+  const part = bookingParts(new Date(value));
+  return `${part.hour}:${part.minute}`;
+}
+function bookingDateTime(value) {
+  const date = new Date(value);
+  return `${dateInBookingZone(date).split("-").reverse().join("/")} ${bookingTime(value)}`;
 }
 function escapeHtml(value) {
   return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
@@ -51,12 +99,31 @@ function mapTicket(row) {
     updatedAt: row.updated_at, comments: [], events: [],
   };
 }
+function mapRoom(row) {
+  return { id: row.id, officeId: row.office_id, name: row.name, capacity: row.capacity, active: row.active };
+}
+function mapBooking(row) {
+  return { id: row.id, roomId: row.room_id, organizerId: row.organizer_id,
+    clientName: row.client_name, subject: row.subject, startsAt: row.starts_at,
+    endsAt: row.ends_at, canceledAt: row.canceled_at };
+}
+
+function resetReservationSession() {
+  reservationDate = dateInBookingZone();
+  reservationDuration = 60;
+  reservationOfficeId = null;
+  adminBookingQuery = "";
+  adminBookingLawyerId = "";
+  selectedSlot = null;
+  availabilityRequest += 1;
+}
 
 async function loadWorkspace() {
   const { data: authData, error: authError } = await db.auth.getUser();
   if (authError) throw authError;
   if (!authData.user) {
-    state = { user: null, offices: [], users: [], tickets: [] };
+    state = { user: null, offices: [], users: [], tickets: [], rooms: [], bookings: [], busy: [], reservationsReady: false };
+    resetReservationSession();
     render();
     return;
   }
@@ -87,8 +154,70 @@ async function loadWorkspace() {
     if (ticket) ticket.events.push({ id: row.id, authorId: row.actor_id, body: row.body, createdAt: row.created_at });
   }
   state.user = mapUser(profile);
+  if (!reservationOfficeId) reservationOfficeId = state.user.officeId;
+  await loadReservationData();
   loading = false;
   render();
+}
+
+function missingReservationSchema(error) {
+  return ["42P01", "PGRST205", "PGRST202"].includes(error?.code);
+}
+
+async function loadReservationData() {
+  const roomsResult = await db.from("meeting_rooms").select("id,office_id,name,capacity,active").order("name");
+  if (roomsResult.error) {
+    if (!missingReservationSchema(roomsResult.error)) throw roomsResult.error;
+    state.rooms = [];
+    state.bookings = [];
+    state.busy = [];
+    state.reservationsReady = false;
+    return;
+  }
+  state.rooms = checkError(roomsResult).map(mapRoom);
+  const bookings = [];
+  const futureFrom = new Date().toISOString();
+  for (let offset = 0; ; offset += 1000) {
+    const bookingsResult = await db.from("room_bookings")
+      .select("id,room_id,organizer_id,client_name,subject,starts_at,ends_at,canceled_at")
+      .gte("ends_at", futureFrom)
+      .order("starts_at", { ascending: true })
+      .order("id", { ascending: true })
+      .range(offset, offset + 999);
+    if (bookingsResult.error && missingReservationSchema(bookingsResult.error)) {
+      state.reservationsReady = false;
+      state.bookings = [];
+      state.busy = [];
+      return;
+    }
+    const page = checkError(bookingsResult);
+    bookings.push(...page.map(mapBooking));
+    if (page.length < 1000) break;
+  }
+  state.bookings = bookings;
+  state.reservationsReady = true;
+  await loadAvailability(reservationDate, false);
+}
+
+async function loadAvailability(date, shouldRender = true) {
+  const request = ++availabilityRequest;
+  const nextDate = new Date(`${date}T12:00:00Z`);
+  nextDate.setUTCDate(nextDate.getUTCDate() + 1);
+  const nextDay = nextDate.toISOString().slice(0, 10);
+  const result = await db.rpc("room_busy_slots", {
+    p_start: bookingLocalToIso(date, "00:00"),
+    p_end: bookingLocalToIso(nextDay, "00:00"),
+  });
+  if (result.error) {
+    if (missingReservationSchema(result.error)) {
+      state.reservationsReady = false;
+      state.busy = [];
+    } else if (shouldRender && request === availabilityRequest) showError(result.error);
+    else throw result.error;
+  } else if (request === availabilityRequest) {
+    state.busy = result.data || [];
+  }
+  if (shouldRender && request === availabilityRequest) render();
 }
 
 function showError(error) {
@@ -110,7 +239,8 @@ async function login(email, password) {
 async function logout() {
   const { error } = await db.auth.signOut();
   if (error) return showError(error);
-  state = { user: null, offices: [], users: [], tickets: [] };
+  state = { user: null, offices: [], users: [], tickets: [], rooms: [], bookings: [], busy: [], reservationsReady: false };
+  resetReservationSession();
   flashError = "";
   go("/login");
   render();
@@ -155,6 +285,53 @@ async function addOffice(payload) {
   } catch (error) { showError(error); }
 }
 
+async function addRoom(payload) {
+  try {
+    checkError(await db.from("meeting_rooms").insert({
+      office_id: payload.officeId, name: payload.name.trim(), capacity: Number(payload.capacity),
+    }));
+    flashSuccess = "Sala cadastrada.";
+    await loadWorkspace();
+  } catch (error) { showError(error); }
+}
+
+async function setRoomActive(id, active) {
+  try {
+    checkError(await db.from("meeting_rooms").update({ active }).eq("id", id).select("id").single());
+    flashSuccess = active ? "Sala ativada." : "Sala desativada para novas reservas.";
+    await loadWorkspace();
+  } catch (error) { showError(error); }
+}
+
+async function createBooking(payload) {
+  try {
+    const start = bookingLocalToIso(payload.date, payload.time);
+    const end = new Date(new Date(start).getTime() + Number(payload.duration) * 60000).toISOString();
+    if (new Date(start).getTime() <= Date.now()) throw new Error("Escolha um horário futuro.");
+    checkError(await db.from("room_bookings").insert({
+      room_id: payload.roomId, organizer_id: currentUser().id,
+      client_name: payload.clientName.trim(), subject: payload.subject.trim(),
+      starts_at: start, ends_at: end,
+    }));
+    selectedSlot = null;
+    reservationDate = payload.date;
+    flashSuccess = "Sala reservada com sucesso.";
+    await loadWorkspace();
+    go("/reservations", true);
+  } catch (error) {
+    if (error?.code === "23P01") showError(new Error("Este horário acabou de ser reservado. Escolha outro horário."));
+    else showError(error);
+  }
+}
+
+async function cancelBooking(id) {
+  try {
+    checkError(await db.from("room_bookings").update({ canceled_at: new Date().toISOString() }).eq("id", id).select("id").single());
+    flashSuccess = "Reserva cancelada.";
+    await loadWorkspace();
+  } catch (error) { showError(error); }
+}
+
 async function sendPasswordRecovery(email) {
   flashError = "";
   flashSuccess = "";
@@ -174,7 +351,8 @@ async function setNewPassword(password) {
     const { error } = await db.auth.updateUser({ password });
     if (error) throw error;
     await db.auth.signOut();
-    state = { user: null, offices: [], users: [], tickets: [] };
+    state = { user: null, offices: [], users: [], tickets: [], rooms: [], bookings: [], busy: [], reservationsReady: false };
+    resetReservationSession();
     history.replaceState(null, "", `${location.pathname}#/login`);
     route = { name: "login", id: null };
     flashSuccess = "Senha atualizada. Entre com a nova senha.";
@@ -215,6 +393,7 @@ function layout(user, title, actions, content) {
         <button class="nav-btn ${route.name === "dashboard" ? "active" : ""}" data-go="/dashboard">Painel</button>
         <button class="nav-btn ${route.name === "tickets" && !route.id ? "active" : ""}" data-go="/tickets">Chamados</button>
         <button class="nav-btn ${route.name === "new" ? "active" : ""}" data-go="/new">Abrir chamado</button>
+        ${user.role !== "atendente" ? `<button class="nav-btn ${route.name === "reservations" ? "active" : ""}" data-go="/reservations">Reservas de salas</button>` : ""}
         <button class="nav-btn ${route.name === "offices" ? "active" : ""}" data-go="/offices">Escritórios</button>
         ${user.role === "admin" ? `<button class="nav-btn ${route.name === "users" ? "active" : ""}" data-go="/users">Equipe</button>` : ""}
         <div class="user-box"><strong>${escapeHtml(user.name)}</strong><br />${LABELS[user.role]} · ${escapeHtml(officeById(user.officeId)?.city || "")}
@@ -269,6 +448,102 @@ function renderResetPassword() {
   </form></section></div>`;
 }
 
+function roomById(id) { return state.rooms.find((room) => room.id === id); }
+
+function availableStarts(room, date, duration) {
+  const starts = [];
+  for (let minute = 8 * 60; minute + duration <= 18 * 60; minute += 30) {
+    const time = `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+    const start = new Date(bookingLocalToIso(date, time)).getTime();
+    const end = start + duration * 60000;
+    if (start <= Date.now()) continue;
+    const occupied = state.busy.some((slot) => slot.room_id === room.id &&
+      new Date(slot.starts_at).getTime() < end && new Date(slot.ends_at).getTime() > start);
+    if (!occupied) starts.push(time);
+  }
+  return starts;
+}
+
+function renderAvailability(user, compact = false) {
+  if (!state.reservationsReady) {
+    return `<section class="card booking-setup"><h2>Reservas de salas</h2><p class="hint">O módulo estará disponível após aplicar a migração do Supabase.</p></section>`;
+  }
+  const rooms = state.rooms.filter((room) => room.active && room.officeId === reservationOfficeId);
+  return `<section class="booking-section">
+    <div class="booking-head"><div><h2>Horários disponíveis</h2><p class="hint">Horário de Brasília · reuniões entre 08:00 e 18:00</p></div>
+      <div class="booking-actions"><button class="btn secondary" id="refresh-bookings" type="button">Atualizar horários</button>${compact ? `<button class="btn secondary" data-go="/reservations">Ver agenda completa</button>` : ""}</div></div>
+    <div class="filters booking-filters">
+      <div class="field"><label for="booking-office">Escritório</label><select id="booking-office">${state.offices.map((office) => `<option value="${office.id}" ${office.id === reservationOfficeId ? "selected" : ""}>${escapeHtml(office.name)}</option>`).join("")}</select></div>
+      <div class="field"><label for="booking-date">Data</label><input id="booking-date" type="date" min="${dateInBookingZone()}" value="${reservationDate}" /></div>
+      <div class="field"><label for="booking-duration">Duração</label><select id="booking-duration">${BOOKING_DURATIONS.map((value) => `<option value="${value}" ${value === reservationDuration ? "selected" : ""}>${value} min</option>`).join("")}</select></div>
+    </div>
+    ${rooms.length ? `<div class="room-grid">${rooms.map((room) => {
+      const starts = availableStarts(room, reservationDate, reservationDuration);
+      const shown = compact ? starts.slice(0, 8) : starts;
+      return `<article class="room-card"><div class="room-title"><h3>${escapeHtml(room.name)}</h3><span>${room.capacity} lugares</span></div>
+        ${starts.length ? `<div class="slot-grid">${shown.map((time) => `<button type="button" class="slot-button" data-slot-room="${room.id}" data-slot-time="${time}">${time}</button>`).join("")}</div>${compact && starts.length > shown.length ? `<p class="hint">Mais ${starts.length - shown.length} horários na agenda completa.</p>` : ""}` : `<p class="hint">Sem horários livres nesta data.</p>`}
+      </article>`;
+    }).join("")}</div>` : `<div class="empty">Ainda não há salas ativas neste escritório.</div>`}
+  </section>`;
+}
+
+function renderBookingForm(user) {
+  if (!selectedSlot) return layout(user, "Nova reserva", "", `<div class="empty">Selecione um horário na agenda para reservar.</div><button class="btn secondary" data-go="/reservations">Ver horários</button>`);
+  const room = roomById(selectedSlot.roomId);
+  if (!room || !room.active) return layout(user, "Nova reserva", "", `<div class="empty">Sala indisponível. Escolha outro horário.</div>`);
+  return layout(user, "Confirmar reserva", `<button class="btn secondary" data-go="/reservations">Voltar à agenda</button>`, `
+    <form id="booking-form" class="card booking-form">
+      <h2>${escapeHtml(room.name)}</h2><p class="hint">${escapeHtml(officeById(room.officeId)?.name || "")} · ${selectedSlot.date.split("-").reverse().join("/")} às ${selectedSlot.time} · ${selectedSlot.duration} min · horário de Brasília</p>
+      <div class="field"><label for="client-name">Cliente</label><input id="client-name" name="clientName" required maxlength="120" autocomplete="off" /></div>
+      <div class="field"><label for="meeting-subject">Assunto</label><input id="meeting-subject" name="subject" required maxlength="160" /></div>
+      <button class="btn copper" type="submit">Confirmar reserva</button>
+    </form>`);
+}
+
+function renderReservations(user) {
+  if (!state.reservationsReady) return layout(user, "Reservas de salas", "", renderAvailability(user));
+  const upcoming = state.bookings.filter((booking) => !booking.canceledAt && new Date(booking.endsAt).getTime() > Date.now());
+  const mine = upcoming.filter((booking) => booking.organizerId === user.id);
+  const visible = user.role === "admin" ? upcoming.filter((booking) =>
+    (!adminBookingLawyerId || booking.organizerId === adminBookingLawyerId)
+    && (!adminBookingQuery || `${booking.clientName} ${booking.subject}`.toLocaleLowerCase("pt-BR").includes(adminBookingQuery.toLocaleLowerCase("pt-BR")))) : mine;
+  const adminSummary = user.role === "admin" ? (() => {
+    const counts = new Map();
+    for (const booking of upcoming) {
+      const key = `${booking.organizerId}\u0000${booking.clientName.toLocaleLowerCase("pt-BR")}`;
+      const previous = counts.get(key);
+      if (previous) previous.count += 1;
+      else counts.set(key, { organizerId: booking.organizerId, clientName: booking.clientName, count: 1 });
+    }
+    const summaryRows = [...counts.values()].sort((a, b) => b.count - a.count)
+      .map((item) => `<tr><td>${escapeHtml(userById(item.organizerId)?.name || "—")}</td><td>${escapeHtml(item.clientName)}</td><td>${item.count}</td></tr>`).join("");
+    return `<section class="booking-section"><h2>Reuniões por advogado e cliente</h2><div class="panel table-scroll">${summaryRows ? `<table><thead><tr><th>Advogado</th><th>Cliente</th><th>Reuniões futuras</th></tr></thead><tbody>${summaryRows}</tbody></table>` : `<div class="empty">Nenhuma reunião futura.</div>`}</div></section>`;
+  })() : "";
+  const adminFilters = user.role === "admin" ? `<div class="filters booking-list-filters">
+    <input id="booking-search" placeholder="Buscar cliente ou assunto" value="${escapeHtml(adminBookingQuery)}" />
+    <select id="booking-lawyer"><option value="">Todos os advogados</option>${state.users.map((person) => `<option value="${person.id}" ${adminBookingLawyerId === person.id ? "selected" : ""}>${escapeHtml(person.name)}</option>`).join("")}</select>
+  </div>` : "";
+  const rows = visible.map((booking) => {
+    const room = roomById(booking.roomId);
+    return `<tr><td>${bookingDateTime(booking.startsAt)}–${bookingTime(booking.endsAt)}</td><td>${escapeHtml(room?.name || "—")}</td>
+      ${user.role === "admin" ? `<td>${escapeHtml(userById(booking.organizerId)?.name || "—")}</td>` : ""}
+      <td>${escapeHtml(booking.clientName)}</td><td>${escapeHtml(booking.subject)}</td>
+      <td>${new Date(booking.startsAt).getTime() > Date.now() ? `<button class="btn secondary small-btn" data-cancel-booking="${booking.id}">Cancelar</button>` : "Em andamento"}</td></tr>`;
+  }).join("");
+  const roomAdmin = user.role === "admin" ? `<section class="booking-section"><h2>Salas cadastradas</h2>
+    <div class="room-list">${state.rooms.map((room) => `<div><span><strong>${escapeHtml(room.name)}</strong> · ${escapeHtml(officeById(room.officeId)?.name || "—")} · ${room.capacity} lugares ${room.active ? "" : "· inativa"}</span><button type="button" class="btn secondary small-btn" data-room-toggle="${room.id}" data-room-active="${room.active ? "false" : "true"}">${room.active ? "Desativar" : "Ativar"}</button></div>`).join("") || "Nenhuma sala cadastrada."}</div>
+    <form id="room-form" class="room-form"><div class="field"><label>Escritório</label><select name="officeId">${state.offices.map((office) => `<option value="${office.id}">${escapeHtml(office.name)}</option>`).join("")}</select></div>
+      <div class="field"><label>Nome da sala</label><input name="name" required maxlength="80" placeholder="Ex.: Sala 1" /></div>
+      <div class="field"><label>Lugares</label><input name="capacity" type="number" min="1" max="100" value="4" required /></div>
+      <button class="btn copper" type="submit">Cadastrar sala</button></form></section>` : "";
+  return layout(user, "Reservas de salas", "", `${renderAvailability(user)}
+    <section class="booking-section"><div class="booking-head"><h2>${user.role === "admin" ? "Próximas reuniões" : "Meus agendamentos"}</h2><span class="booking-count">${visible.length} agendada(s)</span></div>
+      ${adminFilters}
+      <div class="panel table-scroll">${rows ? `<table><thead><tr><th>Data e horário</th><th>Sala</th>${user.role === "admin" ? "<th>Advogado</th>" : ""}<th>Cliente</th><th>Assunto</th><th></th></tr></thead><tbody>${rows}</tbody></table>` : `<div class="empty">Nenhuma reunião agendada.</div>`}</div></section>
+    ${adminSummary}
+    ${roomAdmin}`);
+}
+
 function renderDashboard(user) {
   const tickets = visibleTickets(user);
   const openish = tickets.filter((ticket) => ["aberto", "andamento", "aguardando"].includes(ticket.status));
@@ -277,6 +552,8 @@ function renderDashboard(user) {
   const recent = tickets.slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 6);
   return layout(user, "Painel", `<button class="btn copper" data-go="/new">Novo chamado</button>`, `
     <section class="kpis"><article class="kpi"><span>Abertos na fila</span><strong>${openish.length}</strong></article><article class="kpi"><span>Urgentes</span><strong>${urgent.length}</strong></article><article class="kpi"><span>Comigo</span><strong>${mine.length}</strong></article><article class="kpi"><span>Escritórios</span><strong>${state.offices.length}</strong></article></section>
+    ${state.reservationsReady ? `<section class="kpis booking-kpis"><article class="kpi"><span>${user.role === "admin" ? "Reuniões agendadas" : "Minhas próximas reuniões"}</span><strong>${state.bookings.filter((booking) => !booking.canceledAt && new Date(booking.endsAt) > new Date() && (user.role === "admin" || booking.organizerId === user.id)).length}</strong></article></section>` : ""}
+    ${user.role !== "atendente" ? renderAvailability(user, true) : ""}
     <section class="panel">${ticketTable(recent)}</section>`);
 }
 
@@ -373,6 +650,57 @@ function renderUsers(user) {
 
 function bind() {
   document.querySelectorAll("[data-go]").forEach((element) => element.addEventListener("click", () => go(element.getAttribute("data-go"))));
+  document.querySelectorAll("[data-slot-room]").forEach((element) => element.addEventListener("click", () => {
+    selectedSlot = { roomId: element.dataset.slotRoom, date: reservationDate,
+      time: element.dataset.slotTime, duration: reservationDuration };
+    go("/reservations/new");
+  }));
+  document.getElementById("booking-office")?.addEventListener("change", (event) => {
+    reservationOfficeId = event.target.value;
+    render();
+  });
+  document.getElementById("booking-date")?.addEventListener("change", (event) => {
+    reservationDate = event.target.value;
+    if (reservationDate) loadAvailability(reservationDate).catch(showError);
+  });
+  document.getElementById("booking-duration")?.addEventListener("change", (event) => {
+    reservationDuration = Number(event.target.value);
+    render();
+  });
+  document.getElementById("refresh-bookings")?.addEventListener("click", () => {
+    if (reservationDate < dateInBookingZone()) reservationDate = dateInBookingZone();
+    loadWorkspace().catch(showError);
+  });
+  const bookingForm = document.getElementById("booking-form");
+  bookingForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const data = new FormData(bookingForm);
+    createBooking({ ...selectedSlot, clientName: String(data.get("clientName")), subject: String(data.get("subject")) });
+  });
+  document.querySelectorAll("[data-cancel-booking]").forEach((element) => element.addEventListener("click", () => {
+    if (window.confirm("Cancelar esta reserva?")) cancelBooking(element.dataset.cancelBooking);
+  }));
+  document.querySelectorAll("[data-room-toggle]").forEach((element) => element.addEventListener("click", () => {
+    setRoomActive(element.dataset.roomToggle, element.dataset.roomActive === "true");
+  }));
+  document.getElementById("booking-lawyer")?.addEventListener("change", (event) => {
+    adminBookingLawyerId = event.target.value;
+    render();
+  });
+  document.getElementById("booking-search")?.addEventListener("input", (event) => {
+    adminBookingQuery = event.target.value;
+    const cursor = event.target.selectionStart;
+    render();
+    const refreshed = document.getElementById("booking-search");
+    refreshed?.focus();
+    refreshed?.setSelectionRange(cursor, cursor);
+  });
+  const roomForm = document.getElementById("room-form");
+  roomForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const data = new FormData(roomForm);
+    addRoom({ officeId: String(data.get("officeId")), name: String(data.get("name")), capacity: data.get("capacity") });
+  });
   document.getElementById("logout")?.addEventListener("click", logout);
   const loginForm = document.getElementById("login-form");
   loginForm?.addEventListener("submit", (event) => {
@@ -450,7 +778,10 @@ function render() {
     root.innerHTML = renderLogin(); bind();
     return;
   }
-  if (route.name === "tickets" && route.id) root.innerHTML = renderTicket(user);
+  if (route.name === "reservations" && user.role === "atendente") root.innerHTML = layout(user, "Reservas de salas", "", `<div class="empty">Seu perfil não usa o módulo de reservas.</div>`);
+  else if (route.name === "reservations" && route.id === "new") root.innerHTML = renderBookingForm(user);
+  else if (route.name === "reservations") root.innerHTML = renderReservations(user);
+  else if (route.name === "tickets" && route.id) root.innerHTML = renderTicket(user);
   else if (route.name === "tickets") root.innerHTML = renderTickets(user);
   else if (route.name === "new") root.innerHTML = renderNew(user);
   else if (route.name === "offices") root.innerHTML = renderOffices(user);
@@ -460,7 +791,13 @@ function render() {
   bind();
 }
 
-window.addEventListener("hashchange", () => { route = parseHash(); flashError = ""; flashSuccess = ""; render(); });
+window.addEventListener("hashchange", () => {
+  route = parseHash();
+  flashError = "";
+  if (!keepSuccessOnNavigation) flashSuccess = "";
+  keepSuccessOnNavigation = false;
+  render();
+});
 
 async function boot() {
   if (!window.supabase || !window.HEKP_SUPABASE?.url || !window.HEKP_SUPABASE?.publishableKey) { loading = false; render(); return; }
@@ -472,7 +809,10 @@ async function boot() {
     else { loading = false; render(); }
     db.auth.onAuthStateChange((event) => {
       if (event === "SIGNED_OUT") {
-        state = { user: null, offices: [], users: [], tickets: [] }; loading = false; render();
+        state = { user: null, offices: [], users: [], tickets: [], rooms: [], bookings: [], busy: [], reservationsReady: false };
+        resetReservationSession();
+        loading = false;
+        render();
       }
     });
   } catch (error) { showError(error); }

@@ -32,6 +32,17 @@ Aplicação web para abrir e acompanhar chamados dos escritórios. A autenticaç
 
 8. Entre no app com a conta administradora. No menu **Equipe**, crie colaboradores e atendentes. As novas contas ficam associadas automaticamente ao escritório do administrador. O formulário não permite criar outro administrador.
 
+## Reservas de salas
+
+Depois de executar o esquema inicial, abra o **SQL Editor** do mesmo projeto Supabase e execute [`supabase/room-reservations.sql`](supabase/room-reservations.sql). O arquivo cria as salas, as reservas, as permissões e a função que consulta somente os horários ocupados. Ele pode ser executado novamente sem apagar reservas existentes. Se o aplicativo for publicado antes dessa migração, os chamados continuam disponíveis e a agenda mostra um aviso de configuração pendente.
+
+Entre com uma conta de **administração** e abra **Reservas de salas** para cadastrar as salas de cada escritório. Depois disso, pessoas com perfil **colaborador** já podem consultar horários e reservar. Não é necessário criar um perfil de advogado: o colaborador é o advogado neste fluxo.
+
+- A agenda usa o horário de Brasília (`America/Sao_Paulo`) e oferece reuniões de 30, 60, 90 ou 120 minutos entre 08:00 e 18:00.
+- Colaboradores veem os horários ocupados de todos, mas os detalhes somente das próprias reservas. A administração vê todas as reservas, os clientes e o total de reuniões futuras por advogado e cliente.
+- A reserva é confirmada ao salvar. O banco bloqueia reservas sobrepostas para a mesma sala, mesmo que duas pessoas tentem salvar ao mesmo tempo. Uma reserva cancelada libera o horário.
+- A administração pode ativar ou desativar salas. Desativar impede novas reservas sem apagar o histórico.
+
 ## Abrir e publicar
 
 Para uma verificação inicial, sirva esta pasta por um servidor web estático e abra o endereço local. Para uso da equipe, publique os arquivos em uma hospedagem estática com HTTPS (por exemplo, Vercel ou Netlify). `index.html`, `app.js`, `styles.css` e `config.js` precisam estar no mesmo diretório.
