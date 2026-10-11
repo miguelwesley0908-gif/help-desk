@@ -1,4 +1,9 @@
-const CATEGORIES = ["TI", "Infraestrutura", "Facilities", "RH", "Suprimentos"];
+const CATEGORIES = ["TI", "Infraestrutura", "Financeiro"];
+const CATEGORY_LABELS = {
+  TI: "TI — sistemas, computadores e internet",
+  Infraestrutura: "Infraestrutura — móveis, cabos e periféricos danificados",
+  Financeiro: "Financeiro — assuntos do departamento",
+};
 const PRIORITIES = ["baixa", "media", "alta", "urgente"];
 const STATUSES = ["aberto", "andamento", "aguardando", "resolvido", "encerrado"];
 const BOOKING_TIME_ZONE = "America/Sao_Paulo";
@@ -95,6 +100,7 @@ function mapTicket(row) {
   return {
     id: row.id, number: `HD-${row.ticket_no}`, title: row.title, description: row.description,
     category: row.category, priority: row.priority, status: row.status, officeId: row.office_id,
+    location: row.location || "",
     requesterId: row.requester_id, assigneeId: row.assignee_id, createdAt: row.created_at,
     updatedAt: row.updated_at, comments: [], events: [],
   };
@@ -138,7 +144,7 @@ async function loadWorkspace() {
   const [officeRows, userRows, ticketRows, commentRows, eventRows] = await Promise.all([
     db.from("offices").select("id,name,city,address").order("name"),
     db.from("profiles").select("id,name,role,office_id").order("name"),
-    db.from("tickets").select("id,ticket_no,title,description,category,priority,status,office_id,requester_id,assignee_id,created_at,updated_at").order("updated_at", { ascending: false }),
+    db.from("tickets").select("id,ticket_no,title,description,category,priority,status,office_id,location,requester_id,assignee_id,created_at,updated_at").order("updated_at", { ascending: false }),
     db.from("ticket_comments").select("id,ticket_id,author_id,body,created_at").order("created_at"),
     db.from("ticket_events").select("id,ticket_id,actor_id,body,created_at").order("created_at"),
   ]);
@@ -252,7 +258,7 @@ async function createTicket(payload) {
   try {
     const result = await db.from("tickets").insert({
       title: payload.title.trim(), description: payload.description.trim(), category: payload.category,
-      priority: payload.priority, office_id: officeId, requester_id: user.id,
+      priority: payload.priority, office_id: officeId, location: payload.location.trim() || null, requester_id: user.id,
     }).select("id").single();
     const ticket = checkError(result);
     await loadWorkspace();
@@ -583,10 +589,11 @@ function renderTickets(user) {
 function renderNew(user) {
   const offices = user.role === "colaborador" ? state.offices.filter((item) => item.id === user.officeId) : state.offices;
   return layout(user, "Abrir chamado", "", `<form class="card" id="ticket-form" style="width:min(640px,100%)">
-    <p class="hint">Descreva o problema e informe o escritório de origem.</p>
+    <p class="hint">TI para falhas de tecnologia; Infraestrutura para reparo ou troca de itens físicos; Financeiro para assuntos do departamento.</p>
     <div class="field"><label for="title">Título</label><input id="title" name="title" required maxlength="90" placeholder="Ex.: Impressora da recepção sem papel" /></div>
     <div class="field"><label for="description">Descrição</label><textarea id="description" name="description" required placeholder="O que aconteceu, desde quando e quem foi afetado."></textarea></div>
-    <div class="filters"><div class="field"><label>Categoria</label><select name="category">${CATEGORIES.map((value) => `<option>${value}</option>`).join("")}</select></div>
+    <div class="field"><label for="location">Local dentro do escritório (opcional)</label><input id="location" name="location" maxlength="120" placeholder="Ex.: 2º andar, sala de reuniões ou mesa 12" /></div>
+    <div class="filters"><div class="field"><label>Categoria</label><select name="category">${CATEGORIES.map((value) => `<option value="${value}">${CATEGORY_LABELS[value]}</option>`).join("")}</select></div>
       <div class="field"><label>Prioridade</label><select name="priority">${PRIORITIES.map((value) => `<option value="${value}">${LABELS[value]}</option>`).join("")}</select></div>
       <div class="field"><label>Escritório</label><select name="officeId" ${user.role === "colaborador" ? "disabled" : ""}>${offices.map((item) => `<option value="${item.id}" ${item.id === user.officeId ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select>
       ${user.role === "colaborador" ? `<input type="hidden" name="officeId" value="${escapeHtml(user.officeId)}" />` : ""}</div></div>
@@ -610,7 +617,7 @@ function renderTicket(user) {
   return layout(user, ticket.number, `<button class="btn secondary" data-go="/tickets">Voltar à fila</button>`, `
     <div class="grid-2"><section class="detail"><h2 style="font-family:Fraunces,serif;margin:0 0 8px">${escapeHtml(ticket.title)}</h2><p>${escapeHtml(ticket.description)}</p><h3>Histórico</h3>
       <div class="comments">${renderTimeline(ticket)}</div><form id="comment-form"><div class="field"><label for="body">Nova atualização</label><textarea id="body" name="body" required placeholder="O que mudou?"></textarea></div><button class="btn" type="submit">Publicar</button></form>
-    </section><aside class="detail"><dl class="meta-list"><div><span>Status</span>${badgeStatus(ticket.status)}</div><div><span>Prioridade</span>${badgePriority(ticket.priority)}</div><div><span>Categoria</span><span>${escapeHtml(ticket.category)}</span></div><div><span>Escritório</span><span>${escapeHtml(officeById(ticket.officeId)?.name || "—")}</span></div><div><span>Solicitante</span><span>${escapeHtml(requester?.name || "—")}</span></div><div><span>Atendente</span><span>${escapeHtml(assignee?.name || "Fila livre")}</span></div><div><span>Aberto</span><span>${formatDate(ticket.createdAt)}</span></div></dl>
+    </section><aside class="detail"><dl class="meta-list"><div><span>Status</span>${badgeStatus(ticket.status)}</div><div><span>Prioridade</span>${badgePriority(ticket.priority)}</div><div><span>Categoria</span><span>${escapeHtml(ticket.category)}</span></div><div><span>Escritório</span><span>${escapeHtml(officeById(ticket.officeId)?.name || "—")}</span></div>${ticket.location ? `<div><span>Local</span><span>${escapeHtml(ticket.location)}</span></div>` : ""}<div><span>Solicitante</span><span>${escapeHtml(requester?.name || "—")}</span></div><div><span>Atendente</span><span>${escapeHtml(assignee?.name || "Fila livre")}</span></div><div><span>Aberto</span><span>${formatDate(ticket.createdAt)}</span></div></dl>
       ${canManage(user) ? `<form id="manage-form" style="margin-top:18px"><div class="field"><label>Mover status</label><select name="status">${STATUSES.map((value) => `<option value="${value}" ${ticket.status === value ? "selected" : ""}>${LABELS[value]}</option>`).join("")}</select></div>
       <div class="field"><label>Prioridade</label><select name="priority">${PRIORITIES.map((value) => `<option value="${value}" ${ticket.priority === value ? "selected" : ""}>${LABELS[value]}</option>`).join("")}</select></div>
       <div class="field"><label>Atribuir</label><select name="assigneeId"><option value="">Fila livre</option>${state.users.filter((item) => item.role !== "colaborador").map((item) => `<option value="${item.id}" ${ticket.assigneeId === item.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></div>
@@ -735,7 +742,7 @@ function bind() {
   const ticketForm = document.getElementById("ticket-form");
   ticketForm?.addEventListener("submit", (event) => {
     event.preventDefault(); const data = new FormData(ticketForm);
-    createTicket({ title: String(data.get("title")), description: String(data.get("description")), category: String(data.get("category")), priority: String(data.get("priority")), officeId: String(data.get("officeId")) });
+    createTicket({ title: String(data.get("title")), description: String(data.get("description")), category: String(data.get("category")), priority: String(data.get("priority")), officeId: String(data.get("officeId")), location: String(data.get("location")) });
   });
   const commentForm = document.getElementById("comment-form");
   commentForm?.addEventListener("submit", (event) => { event.preventDefault(); addComment(route.id, String(new FormData(commentForm).get("body"))); });
