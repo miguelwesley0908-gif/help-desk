@@ -159,7 +159,7 @@ create policy "Users can read events on permitted tickets" on public.ticket_even
 using (exists (select 1 from public.tickets t where t.id = ticket_id));
 
 grant select on public.offices, public.profiles, public.tickets, public.ticket_comments, public.ticket_events to authenticated;
-grant insert (title, description, category, priority, office_id, requester_id) on public.tickets to authenticated;
+grant insert (title, description, category, priority, office_id, location, requester_id) on public.tickets to authenticated;
 grant insert (ticket_id, author_id, body) on public.ticket_comments to authenticated;
 grant insert (name, city, address) on public.offices to authenticated;
 grant update (status, priority, assignee_id) on public.tickets to authenticated;
