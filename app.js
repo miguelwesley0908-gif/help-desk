@@ -388,6 +388,30 @@ async function createEmployee(payload) {
   } catch (error) { showError(error); }
 }
 
+async function deleteEmployee(userId) {
+  const employee = userById(userId);
+  if (!employee || employee.id === state.user?.id || employee.role === "admin") return;
+  const confirmed = window.confirm(`Excluir a conta de ${employee.name}? A pessoa perderá o acesso. Chamados, comentários e reservas serão mantidos no histórico, sem vínculo com essa conta.`);
+  if (!confirmed) return;
+
+  flashError = "";
+  flashSuccess = "";
+  try {
+    const { data, error } = await db.functions.invoke("delete-user", { body: { userId } });
+    if (error) {
+      let message = error.message;
+      try {
+        const response = await error.context.json();
+        message = response.error || message;
+      } catch { /* Keep the SDK's message when the response has no JSON body. */ }
+      throw new Error(message);
+    }
+    if (data?.error) throw new Error(data.error);
+    flashSuccess = `A conta de ${employee.name} foi excluída. O histórico foi mantido.`;
+    await loadWorkspace();
+  } catch (error) { showError(error); }
+}
+
 function badgeStatus(status) { return `<span class="badge st-${escapeHtml(status)}">${LABELS[status] || escapeHtml(status)}</span>`; }
 function badgePriority(priority) { return `<span class="badge pr-${escapeHtml(priority)}">${LABELS[priority] || escapeHtml(priority)}</span>`; }
 
@@ -634,13 +658,13 @@ function renderOffices(user) {
 function renderUsers(user) {
   if (user.role !== "admin") return layout(user, "Equipe", "", `<div class="empty">Somente a administração pode cadastrar pessoas.</div>`);
   const teamRows = state.users.map((person) => `
-    <tr><td>${escapeHtml(person.name)}</td><td>${LABELS[person.role] || escapeHtml(person.role)}</td><td>${escapeHtml(officeById(person.officeId)?.name || "—")}</td></tr>
+    <tr><td>${escapeHtml(person.name)}</td><td>${LABELS[person.role] || escapeHtml(person.role)}</td><td>${escapeHtml(officeById(person.officeId)?.name || "—")}</td><td class="user-actions">${person.id !== user.id && person.role !== "admin" ? `<button class="delete-user-button" type="button" data-delete-user="${escapeHtml(person.id)}" aria-label="Excluir conta de ${escapeHtml(person.name)}" title="Excluir conta"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6m4-6v6M5 7l1 14h12l1-14M9 7V4h6v3" /></svg></button>` : ""}</td></tr>
   `).join("");
   return layout(user, "Equipe", "", `
     <div class="grid-2">
       <section class="panel">
         <h2>Usuários cadastrados</h2>
-        ${teamRows ? `<table><thead><tr><th>Nome</th><th>Perfil</th><th>Escritório</th></tr></thead><tbody>${teamRows}</tbody></table>` : `<div class="empty">Ainda não há pessoas cadastradas.</div>`}
+        ${teamRows ? `<table><thead><tr><th>Nome</th><th>Perfil</th><th>Escritório</th><th><span class="sr-only">Ações</span></th></tr></thead><tbody>${teamRows}</tbody></table>` : `<div class="empty">Ainda não há pessoas cadastradas.</div>`}
       </section>
       <form class="card" id="user-form">
         <h2>Cadastrar pessoa</h2>
@@ -656,6 +680,7 @@ function renderUsers(user) {
 }
 
 function bind() {
+  document.querySelectorAll("[data-delete-user]").forEach((element) => element.addEventListener("click", () => deleteEmployee(element.dataset.deleteUser)));
   document.querySelectorAll("[data-go]").forEach((element) => element.addEventListener("click", () => go(element.getAttribute("data-go"))));
   document.querySelectorAll("[data-slot-room]").forEach((element) => element.addEventListener("click", () => {
     selectedSlot = { roomId: element.dataset.slotRoom, date: reservationDate,

@@ -29,7 +29,7 @@ create table if not exists public.tickets (
   status text not null default 'aberto' check (status in ('aberto', 'andamento', 'aguardando', 'resolvido', 'encerrado')),
   office_id uuid not null references public.offices(id),
   location text,
-  requester_id uuid not null references public.profiles(id),
+  requester_id uuid references public.profiles(id) on delete set null,
   assignee_id uuid references public.profiles(id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -38,7 +38,7 @@ create table if not exists public.tickets (
 create table if not exists public.ticket_comments (
   id uuid primary key default gen_random_uuid(),
   ticket_id uuid not null references public.tickets(id) on delete cascade,
-  author_id uuid not null references public.profiles(id),
+  author_id uuid references public.profiles(id) on delete set null,
   body text not null check (char_length(body) between 1 and 5000),
   created_at timestamptz not null default now()
 );

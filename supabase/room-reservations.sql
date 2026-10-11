@@ -16,7 +16,7 @@ create table if not exists public.meeting_rooms (
 create table if not exists public.room_bookings (
   id uuid primary key default gen_random_uuid(),
   room_id uuid not null references public.meeting_rooms(id),
-  organizer_id uuid not null references public.profiles(id),
+  organizer_id uuid references public.profiles(id) on delete set null,
   client_name text not null check (char_length(btrim(client_name)) between 1 and 120),
   subject text not null check (char_length(btrim(subject)) between 1 and 160),
   starts_at timestamptz not null,

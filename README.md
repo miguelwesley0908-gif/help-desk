@@ -32,6 +32,8 @@ Aplicação web para abrir e acompanhar chamados dos escritórios. A autenticaç
 
 8. Entre no app com a conta administradora. No menu **Equipe**, crie colaboradores e atendentes. As novas contas ficam associadas automaticamente ao escritório do administrador. O formulário não permite criar outro administrador.
 
+9. Para permitir que a administração exclua contas pela página **Equipe**, execute [`supabase/account-deletion.sql`](supabase/account-deletion.sql) no SQL Editor. Depois, publique a Edge Function `delete-user`: crie uma função com esse nome em **Edge Functions → Deploy a new function → Via Editor**, copie `supabase/functions/delete-user/index.ts`, mantenha a verificação JWT ativa e publique. A lixeira não aparece para a própria conta nem para contas de administração. Chamados, comentários e reservas são mantidos no histórico sem vínculo com a conta excluída.
+
 ## Reservas de salas
 
 Depois de executar o esquema inicial, abra o **SQL Editor** do mesmo projeto Supabase e execute [`supabase/room-reservations.sql`](supabase/room-reservations.sql). O arquivo cria as salas, as reservas, as permissões e a função que consulta somente os horários ocupados. Ele pode ser executado novamente sem apagar reservas existentes. Se o aplicativo for publicado antes dessa migração, os chamados continuam disponíveis e a agenda mostra um aviso de configuração pendente.
@@ -55,10 +57,10 @@ O navegador carrega `supabase-js` pela CDN jsDelivr, então a hospedagem e os na
 
 - **Colaborador:** abre chamados para o próprio escritório e vê os chamados que abriu.
 - **Atendente:** vê a fila completa, comenta, altera status e prioridade e atribui responsáveis.
-- **Administração:** tem as permissões de atendente, pode cadastrar escritórios e criar contas de colaborador e atendente pela página **Equipe**.
+- **Administração:** tem as permissões de atendente, pode cadastrar escritórios, criar contas de colaborador e atendente e excluir essas contas pela página **Equipe**.
 - Comentários e alterações de status, prioridade e responsável aparecem no histórico do chamado.
 - Senhas e sessões são gerenciadas pelo Supabase Auth. Não há contas ou chamados de demonstração no app.
 
 ## Limites deste MVP
 
-O MVP não envia notificações por e-mail, não tem anexos, não permite alterar ou desativar contas pela página Equipe e não define SLA. A conta inicial de administração ainda precisa ser criada no Supabase antes da primeira entrada. Faça um piloto com dados não sensíveis até revisar o acesso, backups e políticas operacionais do projeto.
+O MVP não envia notificações por e-mail, não tem anexos, não permite editar contas pela página Equipe e não define SLA. A conta inicial de administração ainda precisa ser criada no Supabase antes da primeira entrada. Faça um piloto com dados não sensíveis até revisar o acesso, backups e políticas operacionais do projeto.
