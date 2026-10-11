@@ -1,14 +1,14 @@
 :root {
-  --ink: #152033;
-  --navy: #1e3148;
-  --navy-2: #253a54;
-  --cream: #f4efe6;
-  --paper: #fbf8f2;
-  --white: #fffdf9;
-  --line: #e4dccf;
-  --muted: #6b7280;
-  --copper: #b85c38;
-  --copper-dark: #93472a;
+  --ink: #17150f;
+  --navy: #11110f;
+  --navy-2: #29261e;
+  --cream: #f3f0e8;
+  --paper: #faf8f2;
+  --white: #fffefa;
+  --line: #e3dcc8;
+  --muted: #716d62;
+  --copper: #c9a227;
+  --copper-dark: #a98518;
   --sage: #2f6b4f;
   --gold: #c9a227;
   --danger: #a33b3b;
@@ -168,7 +168,7 @@ textarea {
 input:focus,
 select:focus,
 textarea:focus {
-  border-color: var(--navy);
+  border-color: var(--gold);
   background: white;
 }
 
@@ -193,6 +193,7 @@ textarea:focus {
 
 .btn.copper {
   background: var(--copper);
+  color: #17130a;
 }
 
 .btn.copper:hover {
@@ -250,6 +251,7 @@ textarea:focus {
 .nav-btn.active,
 .nav-btn:hover {
   background: var(--navy-2);
+  box-shadow: inset 3px 0 0 var(--gold);
 }
 
 .user-box {
@@ -362,7 +364,7 @@ tr.clickable {
 }
 
 tr.clickable:hover {
-  background: #f7f1e6;
+  background: #f4eedc;
 }
 
 .badge {
@@ -542,14 +544,14 @@ tr.clickable:hover {
 .room-card .hint { margin: 10px 0 0; }
 .slot-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .slot-button {
-  border: 1px solid #adcab8;
+  border: 1px solid #c9a227;
   border-radius: 9px;
-  background: #e6f2e9;
-  color: #20563a;
+  background: #f7f0d9;
+  color: #4b3a0b;
   padding: 8px 4px;
   font-weight: 600;
 }
-.slot-button:hover { background: #d3ead9; }
+.slot-button:hover { background: #eadba8; }
 .room-list { display: grid; gap: 8px; margin: 14px 0 20px; }
 .room-list > div {
   display: flex;
