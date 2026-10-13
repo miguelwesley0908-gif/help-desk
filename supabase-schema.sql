@@ -14,7 +14,7 @@ create table if not exists public.offices (
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   name text not null,
-  role text not null check (role in ('colaborador', 'atendente', 'admin')),
+  role text not null check (role in ('colaborador', 'atendente', 'coordenador', 'admin')),
   office_id uuid not null references public.offices(id),
   created_at timestamptz not null default now()
 );
@@ -98,6 +98,17 @@ begin
   return new;
 end $$;
 
+create or replace function public.prevent_ticket_reassignment_by_assignee()
+returns trigger language plpgsql set search_path = ''
+as $$
+begin
+  if old.assignee_id is distinct from new.assignee_id
+     and public.current_app_role() not in ('admin', 'coordenador') then
+    raise exception 'Somente a administração ou coordenação pode reatribuir chamados.';
+  end if;
+  return new;
+end $$;
+
 create or replace function public.touch_ticket_from_comment()
 returns trigger language plpgsql security definer set search_path = ''
 as $$ begin update public.tickets set updated_at = now() where id = new.ticket_id; return new; end $$;
@@ -108,6 +119,9 @@ for each row execute function public.set_ticket_updated_at();
 drop trigger if exists tickets_record_changes on public.tickets;
 create trigger tickets_record_changes after update on public.tickets
 for each row execute function public.record_ticket_changes();
+drop trigger if exists tickets_reassignment_guard on public.tickets;
+create trigger tickets_reassignment_guard before update on public.tickets
+for each row execute function public.prevent_ticket_reassignment_by_assignee();
 drop trigger if exists comments_touch_ticket on public.ticket_comments;
 create trigger comments_touch_ticket after insert on public.ticket_comments
 for each row execute function public.touch_ticket_from_comment();
@@ -123,9 +137,9 @@ revoke all on public.offices, public.profiles, public.tickets, public.ticket_com
 drop policy if exists "Signed-in users can read offices" on public.offices;
 create policy "Signed-in users can read offices" on public.offices for select to authenticated using (true);
 drop policy if exists "Admins can add offices" on public.offices;
-create policy "Admins can add offices" on public.offices for insert to authenticated with check (public.current_app_role() = 'admin');
+create policy "Admins can add offices" on public.offices for insert to authenticated with check (public.current_app_role() in ('admin', 'coordenador'));
 drop policy if exists "Admins can edit offices" on public.offices;
-create policy "Admins can edit offices" on public.offices for update to authenticated using (public.current_app_role() = 'admin') with check (public.current_app_role() = 'admin');
+create policy "Admins can edit offices" on public.offices for update to authenticated using (public.current_app_role() in ('admin', 'coordenador')) with check (public.current_app_role() in ('admin', 'coordenador'));
 
 -- Names, roles, and office assignments are visible to signed-in teammates; emails stay in Auth.
 drop policy if exists "Signed-in users can read profiles" on public.profiles;
@@ -133,26 +147,33 @@ create policy "Signed-in users can read profiles" on public.profiles for select 
 
 drop policy if exists "Users can read permitted tickets" on public.tickets;
 create policy "Users can read permitted tickets" on public.tickets for select to authenticated
-using (requester_id = (select auth.uid()) or public.current_app_role() in ('atendente', 'admin'));
+using (
+  requester_id = (select auth.uid())
+  or assignee_id = (select auth.uid())
+  or public.current_app_role() in ('admin', 'coordenador')
+);
 drop policy if exists "Users can open permitted tickets" on public.tickets;
 create policy "Users can open permitted tickets" on public.tickets for insert to authenticated
 with check (
   requester_id = (select auth.uid()) and (
     (public.current_app_role() = 'colaborador' and office_id = public.current_app_office()) or
-    public.current_app_role() in ('atendente', 'admin')
+    public.current_app_role() in ('atendente', 'admin', 'coordenador')
   )
 );
 drop policy if exists "Staff can triage tickets" on public.tickets;
 create policy "Staff can triage tickets" on public.tickets for update to authenticated
-using (public.current_app_role() in ('atendente', 'admin'))
-with check (public.current_app_role() in ('atendente', 'admin'));
+using (public.current_app_role() in ('admin', 'coordenador') or assignee_id = (select auth.uid()))
+with check (public.current_app_role() in ('admin', 'coordenador') or assignee_id = (select auth.uid()));
 
 drop policy if exists "Users can read comments on permitted tickets" on public.ticket_comments;
 create policy "Users can read comments on permitted tickets" on public.ticket_comments for select to authenticated
 using (exists (select 1 from public.tickets t where t.id = ticket_id));
 drop policy if exists "Users can comment on permitted tickets" on public.ticket_comments;
 create policy "Users can comment on permitted tickets" on public.ticket_comments for insert to authenticated
-with check (author_id = (select auth.uid()) and exists (select 1 from public.tickets t where t.id = ticket_id));
+with check (author_id = (select auth.uid()) and exists (
+  select 1 from public.tickets t where t.id = ticket_id
+    and (t.assignee_id = (select auth.uid()) or public.current_app_role() in ('admin', 'coordenador'))
+));
 
 drop policy if exists "Users can read events on permitted tickets" on public.ticket_events;
 create policy "Users can read events on permitted tickets" on public.ticket_events for select to authenticated

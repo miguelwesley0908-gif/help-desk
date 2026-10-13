@@ -12,7 +12,7 @@ const LABELS = {
   baixa: "Baixa", media: "Média", alta: "Alta", urgente: "Urgente",
   aberto: "Aberto", andamento: "Em andamento", aguardando: "Aguardando",
   resolvido: "Resolvido", encerrado: "Encerrado",
-  colaborador: "Colaborador", atendente: "Atendente", admin: "Administração",
+  colaborador: "Colaborador", atendente: "Atendente", admin: "Administração", coordenador: "Coordenador",
 };
 
 let db = null;
@@ -85,9 +85,10 @@ function escapeHtml(value) {
 function currentUser() { return state.user; }
 function officeById(id) { return state.offices.find((office) => office.id === id); }
 function userById(id) { return state.users.find((user) => user.id === id); }
-function canManage(user) { return user?.role === "atendente" || user?.role === "admin"; }
+function canAdminister(user) { return user?.role === "admin" || user?.role === "coordenador"; }
+function canEditTicket(user, ticket) { return canAdminister(user) || ticket?.assigneeId === user?.id; }
 function visibleTickets(user) {
-  return user.role === "colaborador" ? state.tickets.filter((ticket) => ticket.requesterId === user.id) : state.tickets.slice();
+  return state.tickets.slice();
 }
 function checkError(result) {
   if (result.error) throw result.error;
@@ -268,8 +269,9 @@ async function createTicket(payload) {
 
 async function updateTicket(id, patch) {
   const row = {
-    status: patch.status, priority: patch.priority, assignee_id: patch.assigneeId || null,
+    status: patch.status, priority: patch.priority,
   };
+  if (Object.hasOwn(patch, "assigneeId")) row.assignee_id = patch.assigneeId || null;
   try {
     checkError(await db.from("tickets").update(row).eq("id", id).select("id").single());
     await loadWorkspace();
@@ -314,6 +316,9 @@ async function createBooking(payload) {
     const start = bookingLocalToIso(payload.date, payload.time);
     const end = new Date(new Date(start).getTime() + Number(payload.duration) * 60000).toISOString();
     if (new Date(start).getTime() <= Date.now()) throw new Error("Escolha um horário futuro.");
+    if (dateInBookingZone(new Date(end)) !== payload.date || bookingTime(end) > "18:00") {
+      throw new Error("A reunião precisa terminar até 18:00 no horário de Brasília.");
+    }
     checkError(await db.from("room_bookings").insert({
       room_id: payload.roomId, organizer_id: currentUser().id,
       client_name: payload.clientName.trim(), subject: payload.subject.trim(),
@@ -336,6 +341,28 @@ async function cancelBooking(id) {
     flashSuccess = "Reserva cancelada.";
     await loadWorkspace();
   } catch (error) { showError(error); }
+}
+
+async function updateBooking(id, payload) {
+  try {
+    const start = bookingLocalToIso(payload.date, payload.time);
+    const end = new Date(new Date(start).getTime() + Number(payload.duration) * 60000).toISOString();
+    if (new Date(start).getTime() <= Date.now()) throw new Error("Escolha um horário futuro.");
+    if (dateInBookingZone(new Date(end)) !== payload.date || bookingTime(end) > "18:00") {
+      throw new Error("A reunião precisa terminar até 18:00 no horário de Brasília.");
+    }
+    checkError(await db.from("room_bookings").update({
+      room_id: payload.roomId, client_name: payload.clientName.trim(), subject: payload.subject.trim(),
+      starts_at: start, ends_at: end,
+    }).eq("id", id).select("id").single());
+    reservationDate = payload.date;
+    flashSuccess = "Reserva atualizada.";
+    await loadWorkspace();
+    go("/reservations", true);
+  } catch (error) {
+    if (error?.code === "23P01") showError(new Error("Este horário acabou de ser reservado. Escolha outro horário."));
+    else showError(error);
+  }
 }
 
 async function sendPasswordRecovery(email) {
@@ -370,7 +397,7 @@ async function createEmployee(payload) {
   flashError = "";
   flashSuccess = "";
   try {
-    const { data, error } = await db.functions.invoke("clever-function", { body: payload });
+    const { data, error } = await db.functions.invoke("create-user", { body: payload });
     if (error) {
       let message = error.message;
       try {
@@ -390,7 +417,7 @@ async function createEmployee(payload) {
 
 async function deleteEmployee(userId) {
   const employee = userById(userId);
-  if (!employee || employee.id === state.user?.id || employee.role === "admin") return;
+  if (!employee || employee.id === state.user?.id || canAdminister(employee)) return;
   const confirmed = window.confirm(`Excluir a conta de ${employee.name}? A pessoa perderá o acesso. Chamados, comentários e reservas serão mantidos no histórico, sem vínculo com essa conta.`);
   if (!confirmed) return;
 
@@ -412,6 +439,23 @@ async function deleteEmployee(userId) {
   } catch (error) { showError(error); }
 }
 
+async function updateEmployeeRole(userId, role) {
+  try {
+    const { data, error } = await db.functions.invoke("update-user", { body: { userId, role } });
+    if (error) {
+      let message = error.message;
+      try {
+        const response = await error.context.json();
+        message = response.error || message;
+      } catch { /* Keep the SDK's message when the response has no JSON body. */ }
+      throw new Error(message);
+    }
+    if (data?.error) throw new Error(data.error);
+    flashSuccess = "Perfil atualizado.";
+    await loadWorkspace();
+  } catch (error) { showError(error); }
+}
+
 function badgeStatus(status) { return `<span class="badge st-${escapeHtml(status)}">${LABELS[status] || escapeHtml(status)}</span>`; }
 function badgePriority(priority) { return `<span class="badge pr-${escapeHtml(priority)}">${LABELS[priority] || escapeHtml(priority)}</span>`; }
 
@@ -423,9 +467,9 @@ function layout(user, title, actions, content) {
         <button class="nav-btn ${route.name === "dashboard" ? "active" : ""}" data-go="/dashboard">Painel</button>
         <button class="nav-btn ${route.name === "tickets" && !route.id ? "active" : ""}" data-go="/tickets">Chamados</button>
         <button class="nav-btn ${route.name === "new" ? "active" : ""}" data-go="/new">Abrir chamado</button>
-        ${user.role !== "atendente" ? `<button class="nav-btn ${route.name === "reservations" ? "active" : ""}" data-go="/reservations">Reservas de salas</button>` : ""}
+        <button class="nav-btn ${route.name === "reservations" || route.name === "booking" ? "active" : ""}" data-go="/reservations">Reservas de salas</button>
         <button class="nav-btn ${route.name === "offices" ? "active" : ""}" data-go="/offices">Escritórios</button>
-        ${user.role === "admin" ? `<button class="nav-btn ${route.name === "users" ? "active" : ""}" data-go="/users">Equipe</button>` : ""}
+        ${canAdminister(user) ? `<button class="nav-btn ${route.name === "users" ? "active" : ""}" data-go="/users">Equipe</button>` : ""}
         <div class="user-box"><strong>${escapeHtml(user.name)}</strong><br />${LABELS[user.role]} · ${escapeHtml(officeById(user.officeId)?.city || "")}
           <button type="button" id="logout">Sair</button>
         </div>
@@ -530,14 +574,35 @@ function renderBookingForm(user) {
     </form>`);
 }
 
+function renderBookingEditor(user) {
+  const booking = state.bookings.find((item) => item.id === route.id);
+  if (!booking || (booking.organizerId !== user.id && !canAdminister(user)) || new Date(booking.startsAt).getTime() <= Date.now()) {
+    return layout(user, "Editar reserva", "", `<div class="empty">Reserva indisponível para edição.</div><button class="btn secondary" data-go="/reservations">Voltar à agenda</button>`);
+  }
+  const room = roomById(booking.roomId);
+  const date = dateInBookingZone(new Date(booking.startsAt));
+  const duration = Math.round((new Date(booking.endsAt) - new Date(booking.startsAt)) / 60000);
+  return layout(user, "Editar reserva", `<button class="btn secondary" data-go="/reservations">Voltar à agenda</button>`, `
+    <form id="booking-edit-form" class="card booking-form">
+      <h2>${escapeHtml(room?.name || "Sala")}</h2>
+      <div class="field"><label for="edit-booking-room">Sala</label><select id="edit-booking-room" name="roomId" required>${state.rooms.filter((item) => item.active && item.officeId === room?.officeId || item.id === booking.roomId).map((item) => `<option value="${item.id}" ${item.id === booking.roomId ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></div>
+      <div class="field"><label for="edit-booking-date">Data</label><input id="edit-booking-date" name="date" type="date" min="${dateInBookingZone()}" value="${date}" required /></div>
+      <div class="field"><label for="edit-booking-time">Horário</label><input id="edit-booking-time" name="time" type="time" min="08:00" max="17:30" step="1800" value="${bookingTime(booking.startsAt)}" required /></div>
+      <div class="field"><label for="edit-booking-duration">Duração</label><select id="edit-booking-duration" name="duration">${BOOKING_DURATIONS.map((value) => `<option value="${value}" ${value === duration ? "selected" : ""}>${value} min</option>`).join("")}</select></div>
+      <div class="field"><label for="edit-booking-client">Cliente</label><input id="edit-booking-client" name="clientName" required maxlength="120" value="${escapeHtml(booking.clientName)}" /></div>
+      <div class="field"><label for="edit-booking-subject">Assunto</label><input id="edit-booking-subject" name="subject" required maxlength="160" value="${escapeHtml(booking.subject)}" /></div>
+      <button class="btn copper" type="submit">Salvar alterações</button>
+    </form>`);
+}
+
 function renderReservations(user) {
   if (!state.reservationsReady) return layout(user, "Reservas de salas", "", renderAvailability(user));
   const upcoming = state.bookings.filter((booking) => !booking.canceledAt && new Date(booking.endsAt).getTime() > Date.now());
-  const mine = upcoming.filter((booking) => booking.organizerId === user.id);
-  const visible = user.role === "admin" ? upcoming.filter((booking) =>
+  const visible = upcoming;
+  const adminVisible = canAdminister(user) ? upcoming.filter((booking) =>
     (!adminBookingLawyerId || booking.organizerId === adminBookingLawyerId)
-    && (!adminBookingQuery || `${booking.clientName} ${booking.subject}`.toLocaleLowerCase("pt-BR").includes(adminBookingQuery.toLocaleLowerCase("pt-BR")))) : mine;
-  const adminSummary = user.role === "admin" ? (() => {
+    && (!adminBookingQuery || `${booking.clientName} ${booking.subject}`.toLocaleLowerCase("pt-BR").includes(adminBookingQuery.toLocaleLowerCase("pt-BR")))) : upcoming;
+  const adminSummary = canAdminister(user) ? (() => {
     const counts = new Map();
     for (const booking of upcoming) {
       const key = `${booking.organizerId}\u0000${booking.clientName.toLocaleLowerCase("pt-BR")}`;
@@ -549,27 +614,27 @@ function renderReservations(user) {
       .map((item) => `<tr><td>${escapeHtml(userById(item.organizerId)?.name || "—")}</td><td>${escapeHtml(item.clientName)}</td><td>${item.count}</td></tr>`).join("");
     return `<section class="booking-section"><h2>Reuniões por advogado e cliente</h2><div class="panel table-scroll">${summaryRows ? `<table><thead><tr><th>Advogado</th><th>Cliente</th><th>Reuniões futuras</th></tr></thead><tbody>${summaryRows}</tbody></table>` : `<div class="empty">Nenhuma reunião futura.</div>`}</div></section>`;
   })() : "";
-  const adminFilters = user.role === "admin" ? `<div class="filters booking-list-filters">
+  const adminFilters = canAdminister(user) ? `<div class="filters booking-list-filters">
     <input id="booking-search" placeholder="Buscar cliente ou assunto" value="${escapeHtml(adminBookingQuery)}" />
     <select id="booking-lawyer"><option value="">Todos os advogados</option>${state.users.map((person) => `<option value="${person.id}" ${adminBookingLawyerId === person.id ? "selected" : ""}>${escapeHtml(person.name)}</option>`).join("")}</select>
   </div>` : "";
-  const rows = visible.map((booking) => {
+  const rows = (canAdminister(user) ? adminVisible : visible).map((booking) => {
     const room = roomById(booking.roomId);
     return `<tr><td>${bookingDateTime(booking.startsAt)}–${bookingTime(booking.endsAt)}</td><td>${escapeHtml(room?.name || "—")}</td>
-      ${user.role === "admin" ? `<td>${escapeHtml(userById(booking.organizerId)?.name || "—")}</td>` : ""}
+      <td>${escapeHtml(userById(booking.organizerId)?.name || "—")}</td>
       <td>${escapeHtml(booking.clientName)}</td><td>${escapeHtml(booking.subject)}</td>
-      <td>${new Date(booking.startsAt).getTime() > Date.now() ? `<button class="btn secondary small-btn" data-cancel-booking="${booking.id}">Cancelar</button>` : "Em andamento"}</td></tr>`;
+      <td>${new Date(booking.startsAt).getTime() > Date.now() && (booking.organizerId === user.id || canAdminister(user)) ? `<button class="btn secondary small-btn" data-edit-booking="${booking.id}">Editar</button> <button class="btn secondary small-btn" data-cancel-booking="${booking.id}">Cancelar</button>` : "Em andamento"}</td></tr>`;
   }).join("");
-  const roomAdmin = user.role === "admin" ? `<section class="booking-section"><h2>Salas cadastradas</h2>
+  const roomAdmin = canAdminister(user) ? `<section class="booking-section"><h2>Salas cadastradas</h2>
     <div class="room-list">${state.rooms.map((room) => `<div><span><strong>${escapeHtml(room.name)}</strong> · ${escapeHtml(officeById(room.officeId)?.name || "—")} · ${room.capacity} lugares ${room.active ? "" : "· inativa"}</span><button type="button" class="btn secondary small-btn" data-room-toggle="${room.id}" data-room-active="${room.active ? "false" : "true"}">${room.active ? "Desativar" : "Ativar"}</button></div>`).join("") || "Nenhuma sala cadastrada."}</div>
     <form id="room-form" class="room-form"><div class="field"><label>Escritório</label><select name="officeId">${state.offices.map((office) => `<option value="${office.id}">${escapeHtml(office.name)}</option>`).join("")}</select></div>
       <div class="field"><label>Nome da sala</label><input name="name" required maxlength="80" placeholder="Ex.: Sala 1" /></div>
       <div class="field"><label>Lugares</label><input name="capacity" type="number" min="1" max="100" value="4" required /></div>
       <button class="btn copper" type="submit">Cadastrar sala</button></form></section>` : "";
   return layout(user, "Reservas de salas", "", `${renderAvailability(user)}
-    <section class="booking-section"><div class="booking-head"><h2>${user.role === "admin" ? "Próximas reuniões" : "Meus agendamentos"}</h2><span class="booking-count">${visible.length} agendada(s)</span></div>
+    <section class="booking-section"><div class="booking-head"><h2>Reuniões agendadas</h2><span class="booking-count">${(canAdminister(user) ? adminVisible : visible).length} agendada(s)</span></div>
       ${adminFilters}
-      <div class="panel table-scroll">${rows ? `<table><thead><tr><th>Data e horário</th><th>Sala</th>${user.role === "admin" ? "<th>Advogado</th>" : ""}<th>Cliente</th><th>Assunto</th><th></th></tr></thead><tbody>${rows}</tbody></table>` : `<div class="empty">Nenhuma reunião agendada.</div>`}</div></section>
+      <div class="panel table-scroll">${rows ? `<table><thead><tr><th>Data e horário</th><th>Sala</th><th>Organizador</th><th>Cliente</th><th>Assunto</th><th></th></tr></thead><tbody>${rows}</tbody></table>` : `<div class="empty">Nenhuma reunião agendada.</div>`}</div></section>
     ${adminSummary}
     ${roomAdmin}`);
 }
@@ -582,8 +647,8 @@ function renderDashboard(user) {
   const recent = tickets.slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 6);
   return layout(user, "Painel", `<button class="btn copper" data-go="/new">Novo chamado</button>`, `
     <section class="kpis"><article class="kpi"><span>Abertos na fila</span><strong>${openish.length}</strong></article><article class="kpi"><span>Urgentes</span><strong>${urgent.length}</strong></article><article class="kpi"><span>Comigo</span><strong>${mine.length}</strong></article><article class="kpi"><span>Escritórios</span><strong>${state.offices.length}</strong></article></section>
-    ${state.reservationsReady ? `<section class="kpis booking-kpis"><article class="kpi"><span>${user.role === "admin" ? "Reuniões agendadas" : "Minhas próximas reuniões"}</span><strong>${state.bookings.filter((booking) => !booking.canceledAt && new Date(booking.endsAt) > new Date() && (user.role === "admin" || booking.organizerId === user.id)).length}</strong></article></section>` : ""}
-    ${user.role !== "atendente" ? renderAvailability(user, true) : ""}
+    ${state.reservationsReady ? `<section class="kpis booking-kpis"><article class="kpi"><span>${canAdminister(user) ? "Reuniões agendadas" : "Minhas próximas reuniões"}</span><strong>${state.bookings.filter((booking) => !booking.canceledAt && new Date(booking.endsAt) > new Date() && (canAdminister(user) || booking.organizerId === user.id)).length}</strong></article></section>` : ""}
+    ${renderAvailability(user, true)}
     <section class="panel">${ticketTable(recent)}</section>`);
 }
 
@@ -638,27 +703,28 @@ function renderTicket(user) {
   if (!ticket) return layout(user, "Chamado", "", `<div class="empty">Chamado não encontrado.</div>`);
   const requester = userById(ticket.requesterId);
   const assignee = userById(ticket.assigneeId);
+  const mayEdit = canEditTicket(user, ticket);
   return layout(user, ticket.number, `<button class="btn secondary" data-go="/tickets">Voltar à fila</button>`, `
     <div class="grid-2"><section class="detail"><h2 style="font-family:Fraunces,serif;margin:0 0 8px">${escapeHtml(ticket.title)}</h2><p>${escapeHtml(ticket.description)}</p><h3>Histórico</h3>
-      <div class="comments">${renderTimeline(ticket)}</div><form id="comment-form"><div class="field"><label for="body">Nova atualização</label><textarea id="body" name="body" required placeholder="O que mudou?"></textarea></div><button class="btn" type="submit">Publicar</button></form>
+      <div class="comments">${renderTimeline(ticket)}</div>${mayEdit ? `<form id="comment-form"><div class="field"><label for="body">Nova atualização</label><textarea id="body" name="body" required placeholder="O que mudou?"></textarea></div><button class="btn" type="submit">Publicar</button></form>` : `<p class="hint">Somente a pessoa responsável pode comentar neste chamado.</p>`}
     </section><aside class="detail"><dl class="meta-list"><div><span>Status</span>${badgeStatus(ticket.status)}</div><div><span>Prioridade</span>${badgePriority(ticket.priority)}</div><div><span>Categoria</span><span>${escapeHtml(ticket.category)}</span></div><div><span>Escritório</span><span>${escapeHtml(officeById(ticket.officeId)?.name || "—")}</span></div>${ticket.location ? `<div><span>Local</span><span>${escapeHtml(ticket.location)}</span></div>` : ""}<div><span>Solicitante</span><span>${escapeHtml(requester?.name || "—")}</span></div><div><span>Atendente</span><span>${escapeHtml(assignee?.name || "Fila livre")}</span></div><div><span>Aberto</span><span>${formatDate(ticket.createdAt)}</span></div></dl>
-      ${canManage(user) ? `<form id="manage-form" style="margin-top:18px"><div class="field"><label>Mover status</label><select name="status">${STATUSES.map((value) => `<option value="${value}" ${ticket.status === value ? "selected" : ""}>${LABELS[value]}</option>`).join("")}</select></div>
+      ${mayEdit ? `<form id="manage-form" style="margin-top:18px"><div class="field"><label>Mover status</label><select name="status">${STATUSES.map((value) => `<option value="${value}" ${ticket.status === value ? "selected" : ""}>${LABELS[value]}</option>`).join("")}</select></div>
       <div class="field"><label>Prioridade</label><select name="priority">${PRIORITIES.map((value) => `<option value="${value}" ${ticket.priority === value ? "selected" : ""}>${LABELS[value]}</option>`).join("")}</select></div>
-      <div class="field"><label>Atribuir</label><select name="assigneeId"><option value="">Fila livre</option>${state.users.filter((item) => item.role !== "colaborador").map((item) => `<option value="${item.id}" ${ticket.assigneeId === item.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></div>
-      <button class="btn copper full" type="submit">Salvar triagem</button></form>` : ""}</aside></div>`);
+      ${canAdminister(user) ? `<div class="field"><label>Atribuir</label><select name="assigneeId"><option value="">Fila livre</option>${state.users.filter((item) => item.role !== "colaborador").map((item) => `<option value="${item.id}" ${ticket.assigneeId === item.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></div>` : ""}
+      <button class="btn copper full" type="submit">Salvar alterações</button></form>` : ""}</aside></div>`);
 }
 
 function renderOffices(user) {
   return layout(user, "Escritórios", "", `<section class="offices">${state.offices.map((office) => {
     const count = state.tickets.filter((ticket) => ticket.officeId === office.id && ticket.status !== "encerrado").length;
     return `<article class="office-card"><h3>${escapeHtml(office.name)}</h3><p class="hint">${escapeHtml(office.address)}</p><div>${count} chamado(s) ativos</div></article>`;
-  }).join("")}</section>${user.role === "admin" ? `<form class="card" id="office-form" style="margin-top:18px;width:min(520px,100%)"><h2>Novo escritório</h2><div class="field"><label>Nome</label><input name="name" required placeholder="Curitiba — Batel" /></div><div class="field"><label>Cidade</label><input name="city" required /></div><div class="field"><label>Endereço</label><input name="address" required /></div><button class="btn copper" type="submit">Adicionar</button></form>` : ""}`);
+  }).join("")}</section>${canAdminister(user) ? `<form class="card" id="office-form" style="margin-top:18px;width:min(520px,100%)"><h2>Novo escritório</h2><div class="field"><label>Nome</label><input name="name" required placeholder="Curitiba — Batel" /></div><div class="field"><label>Cidade</label><input name="city" required /></div><div class="field"><label>Endereço</label><input name="address" required /></div><button class="btn copper" type="submit">Adicionar</button></form>` : ""}`);
 }
 
 function renderUsers(user) {
-  if (user.role !== "admin") return layout(user, "Equipe", "", `<div class="empty">Somente a administração pode cadastrar pessoas.</div>`);
+  if (!canAdminister(user)) return layout(user, "Equipe", "", `<div class="empty">Somente a administração e a coordenação podem cadastrar pessoas.</div>`);
   const teamRows = state.users.map((person) => `
-    <tr><td>${escapeHtml(person.name)}</td><td>${LABELS[person.role] || escapeHtml(person.role)}</td><td>${escapeHtml(officeById(person.officeId)?.name || "—")}</td><td class="user-actions">${person.id !== user.id && person.role !== "admin" ? `<button class="delete-user-button" type="button" data-delete-user="${escapeHtml(person.id)}" aria-label="Excluir conta de ${escapeHtml(person.name)}" title="Excluir conta"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6m4-6v6M5 7l1 14h12l1-14M9 7V4h6v3" /></svg></button>` : ""}</td></tr>
+    <tr><td>${escapeHtml(person.name)}</td><td>${person.id !== user.id && person.role !== "admin" ? `<select data-user-role="${person.id}" aria-label="Perfil de ${escapeHtml(person.name)}"><option value="colaborador" ${person.role === "colaborador" ? "selected" : ""}>Colaborador</option><option value="atendente" ${person.role === "atendente" ? "selected" : ""}>Atendente</option><option value="coordenador" ${person.role === "coordenador" ? "selected" : ""}>Coordenador</option></select>` : LABELS[person.role] || escapeHtml(person.role)}</td><td>${escapeHtml(officeById(person.officeId)?.name || "—")}</td><td class="user-actions">${person.id !== user.id && person.role !== "admin" ? `<button class="btn secondary small-btn" type="button" data-save-user-role="${person.id}">Salvar perfil</button>${person.role !== "coordenador" ? `<button class="delete-user-button" type="button" data-delete-user="${escapeHtml(person.id)}" aria-label="Excluir conta de ${escapeHtml(person.name)}" title="Excluir conta"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6m4-6v6M5 7l1 14h12l1-14M9 7V4h6v3" /></svg></button>` : ""}` : ""}</td></tr>
   `).join("");
   return layout(user, "Equipe", "", `
     <div class="grid-2">
@@ -672,7 +738,7 @@ function renderUsers(user) {
         <div class="field"><label for="user-name">Nome</label><input id="user-name" name="name" required maxlength="100" autocomplete="name" /></div>
         <div class="field"><label for="user-email">E-mail de trabalho</label><input id="user-email" name="email" type="email" required maxlength="254" autocomplete="email" /></div>
         <div class="field"><label for="user-password">Senha inicial</label><input id="user-password" name="password" type="password" required minlength="8" maxlength="72" autocomplete="new-password" /><small class="hint">Use pelo menos 8 caracteres e entregue a senha à pessoa por um canal seguro.</small></div>
-        <div class="field"><label for="user-role">Perfil</label><select id="user-role" name="role"><option value="colaborador">Colaborador</option><option value="atendente">Atendente</option></select></div>
+        <div class="field"><label for="user-role">Perfil</label><select id="user-role" name="role"><option value="colaborador">Colaborador</option><option value="atendente">Atendente</option><option value="coordenador">Coordenador</option></select></div>
         <button class="btn copper full" type="submit">Criar conta</button>
       </form>
     </div>
@@ -680,6 +746,10 @@ function renderUsers(user) {
 }
 
 function bind() {
+  document.querySelectorAll("[data-save-user-role]").forEach((element) => element.addEventListener("click", () => {
+    const select = document.querySelector(`[data-user-role="${element.dataset.saveUserRole}"]`);
+    if (select) updateEmployeeRole(element.dataset.saveUserRole, select.value);
+  }));
   document.querySelectorAll("[data-delete-user]").forEach((element) => element.addEventListener("click", () => deleteEmployee(element.dataset.deleteUser)));
   document.querySelectorAll("[data-go]").forEach((element) => element.addEventListener("click", () => go(element.getAttribute("data-go"))));
   document.querySelectorAll("[data-slot-room]").forEach((element) => element.addEventListener("click", () => {
@@ -708,6 +778,13 @@ function bind() {
     event.preventDefault();
     const data = new FormData(bookingForm);
     createBooking({ ...selectedSlot, clientName: String(data.get("clientName")), subject: String(data.get("subject")) });
+  });
+  document.querySelectorAll("[data-edit-booking]").forEach((element) => element.addEventListener("click", () => go(`/booking/${element.dataset.editBooking}`)));
+  const bookingEditForm = document.getElementById("booking-edit-form");
+  bookingEditForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const data = new FormData(bookingEditForm);
+    updateBooking(route.id, Object.fromEntries(data.entries()));
   });
   document.querySelectorAll("[data-cancel-booking]").forEach((element) => element.addEventListener("click", () => {
     if (window.confirm("Cancelar esta reserva?")) cancelBooking(element.dataset.cancelBooking);
@@ -774,7 +851,9 @@ function bind() {
   const manageForm = document.getElementById("manage-form");
   manageForm?.addEventListener("submit", (event) => {
     event.preventDefault(); const data = new FormData(manageForm);
-    updateTicket(route.id, { status: String(data.get("status")), priority: String(data.get("priority")), assigneeId: String(data.get("assigneeId")) || null });
+    const patch = { status: String(data.get("status")), priority: String(data.get("priority")) };
+    if (data.has("assigneeId")) patch.assigneeId = String(data.get("assigneeId")) || null;
+    updateTicket(route.id, patch);
   });
   const officeForm = document.getElementById("office-form");
   officeForm?.addEventListener("submit", (event) => {
@@ -810,7 +889,7 @@ function render() {
     root.innerHTML = renderLogin(); bind();
     return;
   }
-  if (route.name === "reservations" && user.role === "atendente") root.innerHTML = layout(user, "Reservas de salas", "", `<div class="empty">Seu perfil não usa o módulo de reservas.</div>`);
+  if (route.name === "booking") root.innerHTML = renderBookingEditor(user);
   else if (route.name === "reservations" && route.id === "new") root.innerHTML = renderBookingForm(user);
   else if (route.name === "reservations") root.innerHTML = renderReservations(user);
   else if (route.name === "tickets" && route.id) root.innerHTML = renderTicket(user);

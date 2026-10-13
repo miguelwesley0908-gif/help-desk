@@ -56,23 +56,24 @@ for select to authenticated using (public.current_app_role() is not null);
 
 drop policy if exists "Admins can add rooms" on public.meeting_rooms;
 create policy "Admins can add rooms" on public.meeting_rooms
-for insert to authenticated with check (public.current_app_role() = 'admin');
+for insert to authenticated with check (public.current_app_role() in ('admin', 'coordenador'));
 
 drop policy if exists "Admins can edit rooms" on public.meeting_rooms;
 create policy "Admins can edit rooms" on public.meeting_rooms
-for update to authenticated using (public.current_app_role() = 'admin')
-with check (public.current_app_role() = 'admin');
+for update to authenticated using (public.current_app_role() in ('admin', 'coordenador'))
+with check (public.current_app_role() in ('admin', 'coordenador'));
 
 drop policy if exists "Owners and admins can read bookings" on public.room_bookings;
-create policy "Owners and admins can read bookings" on public.room_bookings
+drop policy if exists "Authenticated users can read bookings" on public.room_bookings;
+create policy "Authenticated users can read bookings" on public.room_bookings
 for select to authenticated
-using (organizer_id = (select auth.uid()) or public.current_app_role() = 'admin');
+using (public.current_app_role() is not null);
 
 drop policy if exists "Users can book active rooms" on public.room_bookings;
 create policy "Users can book active rooms" on public.room_bookings
 for insert to authenticated with check (
   organizer_id = (select auth.uid())
-  and public.current_app_role() in ('colaborador', 'admin')
+  and public.current_app_role() in ('colaborador', 'atendente', 'admin', 'coordenador')
   and starts_at > now()
   and exists (select 1 from public.meeting_rooms r where r.id = room_id and r.active)
 );
@@ -82,11 +83,14 @@ create policy "Owners and admins can cancel future bookings" on public.room_book
 for update to authenticated
 using (
   canceled_at is null and starts_at > now()
-  and (organizer_id = (select auth.uid()) or public.current_app_role() = 'admin')
+  and (organizer_id = (select auth.uid()) or public.current_app_role() in ('admin', 'coordenador'))
 )
 with check (
-  canceled_at is not null
-  and (organizer_id = (select auth.uid()) or public.current_app_role() = 'admin')
+  starts_at > now()
+  and (organizer_id = (select auth.uid()) or public.current_app_role() in ('admin', 'coordenador'))
+  and (canceled_at is not null or exists (
+    select 1 from public.meeting_rooms r where r.id = room_id and r.active
+  ))
 );
 
 grant select on public.meeting_rooms, public.room_bookings to authenticated;
@@ -94,6 +98,7 @@ grant insert (office_id, name, capacity) on public.meeting_rooms to authenticate
 grant update (name, capacity, active) on public.meeting_rooms to authenticated;
 grant insert (room_id, organizer_id, client_name, subject, starts_at, ends_at) on public.room_bookings to authenticated;
 grant update (canceled_at) on public.room_bookings to authenticated;
+grant update (room_id, client_name, subject, starts_at, ends_at) on public.room_bookings to authenticated;
 
 -- Availability exposes only occupied room/time intervals, not client or organizer.
 create or replace function public.room_busy_slots(p_start timestamptz, p_end timestamptz)

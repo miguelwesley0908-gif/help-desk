@@ -35,7 +35,7 @@ const handleDeleteUser = withSupabase({ auth: "user" }, async (request, context)
     .eq("id", adminId)
     .single();
   if (adminLookupError || !adminProfile) return respond({ error: "Não foi possível conferir seu perfil." }, 403);
-  if (adminProfile.role !== "admin") return respond({ error: "Somente a administração pode excluir contas." }, 403);
+  if (!['admin', 'coordenador'].includes(adminProfile.role)) return respond({ error: "Somente a administração ou coordenação pode excluir contas." }, 403);
 
   const { data: targetProfile, error: targetLookupError } = await context.supabase
     .from("profiles")
@@ -44,7 +44,7 @@ const handleDeleteUser = withSupabase({ auth: "user" }, async (request, context)
     .maybeSingle();
   if (targetLookupError) return respond({ error: "Não foi possível localizar essa conta." }, 500);
   if (!targetProfile) return respond({ error: "Essa conta não existe ou já foi excluída." }, 404);
-  if (targetProfile.role === "admin") return respond({ error: "Contas de administração não podem ser excluídas por esta tela." }, 400);
+  if (["admin", "coordenador"].includes(targetProfile.role)) return respond({ error: "Contas de administração e coordenação não podem ser excluídas por esta tela." }, 400);
 
   const { error: deleteError } = await context.supabaseAdmin.auth.admin.deleteUser(userId);
   if (deleteError) return respond({ error: deleteError.message || "Não foi possível excluir a conta." }, 500);
