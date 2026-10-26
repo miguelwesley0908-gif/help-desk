@@ -30,7 +30,7 @@ Aplicação web para abrir e acompanhar chamados dos escritórios. A autenticaç
 
    O Supabase disponibiliza as chaves secretas à Edge Function no servidor. Não copie nenhuma chave secreta para o navegador. Consulte a [documentação de publicação pelo Dashboard](https://supabase.com/docs/guides/functions/quickstart-dashboard) e [segurança de Edge Functions](https://supabase.com/docs/guides/functions/auth).
 
-8. Entre no app com a conta administradora. No menu **Equipe**, crie colaboradores, atendentes e coordenadores. As novas contas ficam associadas automaticamente ao escritório do administrador. O formulário não permite criar outra conta de administração.
+8. Entre no app com a conta administradora. No menu **Equipe**, crie colaboradores, atendentes, pessoas do Financeiro e coordenadores. As novas contas ficam associadas automaticamente ao escritório do administrador. O formulário não permite criar outra conta de administração.
 
 9. Para permitir que administração e coordenação excluam contas pela página **Equipe**, execute [`supabase/account-deletion.sql`](supabase/account-deletion.sql) no SQL Editor. Depois, publique a Edge Function `delete-user`: crie uma função com esse nome em **Edge Functions → Deploy a new function → Via Editor**, copie `supabase/functions/delete-user/index.ts`, mantenha a verificação JWT ativa e publique. A lixeira não aparece para a própria conta nem para contas de administração ou coordenação. Chamados, comentários e reservas são mantidos no histórico sem vínculo com a conta excluída.
 
@@ -56,6 +56,18 @@ Para aplicar os novos perfis em um projeto Supabase já existente, execute [`sup
 
 As regras também são aplicadas no Supabase, então esconder um botão no navegador não é a única proteção.
 
+## Fluxo de orçamento e aprovação
+
+Depois das migrações acima, execute [`supabase/ticket-workflow.sql`](supabase/ticket-workflow.sql) no SQL Editor. Ela adiciona as etapas do fluxo, o perfil Financeiro, anexos privados, notificações internas, validações e políticas RLS. Para cadastrar pessoas do Financeiro pela tela **Equipe**, publique novamente as Edge Functions `create-user` e `update-user` usando os arquivos atualizados em `supabase/functions/`.
+
+1. Em **Equipe**, crie o usuário da Andreza com perfil **Atendente** e o usuário do Financeiro com perfil **Financeiro**. Use contas separadas da sua conta de administração.
+2. No chamado, administração ou coordenação escolhe Andreza como responsável contínua, escolhe a pessoa do Financeiro e inicia o contato. Andreza continua acompanhando mesmo quando o Financeiro assume a etapa.
+3. Andreza contata Thomas fora do app, anexa o orçamento em PDF ou imagem e informa o valor. O chamado passa ao Financeiro.
+4. O Financeiro aprova ou rejeita e registra a observação. A decisão fica no histórico; o chamado volta para Andreza.
+5. Após combinar e acompanhar o serviço com Thomas, Andreza confirma a conclusão e resolve o chamado.
+
+As notificações aparecem dentro do app e são atualizadas em até 30 segundos enquanto a sessão estiver aberta. Este fluxo não envia e-mail nem integra o WhatsApp. Os arquivos ficam em bucket privado do Supabase Storage e os links de visualização expiram após um minuto.
+
 ## Abrir e publicar
 
 Para uma verificação inicial, sirva esta pasta por um servidor web estático e abra o endereço local. Para uso da equipe, publique os arquivos em uma hospedagem estática com HTTPS (por exemplo, Vercel ou Netlify). `index.html`, `app.js`, `styles.css` e `config.js` precisam estar no mesmo diretório.
@@ -67,11 +79,12 @@ O navegador carrega `supabase-js` pela CDN jsDelivr, então a hospedagem e os na
 ## Papéis e dados
 
 - **Colaborador:** abre chamados para o próprio escritório e consulta somente os que abriu ou que foram atribuídos a ele. Só pode comentar ou atualizar os que estiverem atribuídos a ele.
-- **Atendente:** consulta somente os chamados que abriu ou que foram atribuídos a ele. Só pode comentar ou atualizar os que estiverem atribuídos a ele.
+- **Atendente:** consulta chamados atribuídos a ele ou que abriu. A pessoa atribuída como responsável contínua também acompanha e comenta durante as etapas de aprovação.
+- **Financeiro:** consulta e decide orçamentos atribuídos a ele. Não pode trocar os responsáveis nem alterar o valor recebido.
 - **Coordenador e administração:** podem consultar e gerenciar todos os chamados, atribuí-los e administrar escritórios, salas e contas de equipe.
 - Comentários e alterações de status, prioridade e responsável aparecem no histórico e seguem a mesma visibilidade do chamado.
 - Senhas e sessões são gerenciadas pelo Supabase Auth. Não há contas ou chamados de demonstração no app.
 
 ## Limites deste MVP
 
-O MVP não envia notificações por e-mail, não tem anexos, não permite editar contas pela página Equipe e não define SLA. A conta inicial de administração ainda precisa ser criada no Supabase antes da primeira entrada. Faça um piloto com dados não sensíveis até revisar o acesso, backups e políticas operacionais do projeto.
+O MVP envia notificações somente dentro do app, não envia e-mail, não integra o WhatsApp e não define SLA. A conta inicial de administração ainda precisa ser criada no Supabase antes da primeira entrada. Faça um piloto com dados não sensíveis até revisar o acesso, backups e políticas operacionais do projeto.

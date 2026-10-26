@@ -376,6 +376,73 @@ tr.clickable:hover {
   font-weight: 600;
 }
 
+.notification-panel {
+  margin: 0 0 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--white);
+  padding: 14px 16px;
+}
+
+.notification-panel > strong {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.notification-panel > div {
+  display: grid;
+  gap: 6px;
+}
+
+.notification-item,
+.attachment-link {
+  width: 100%;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink);
+  padding: 9px 10px;
+  text-align: left;
+}
+
+.notification-item:hover,
+.attachment-link:hover {
+  background: var(--cream);
+}
+
+.notification-item.unread {
+  background: #f4edda;
+}
+
+.notification-item span,
+.notification-item small {
+  display: block;
+}
+
+.notification-item small {
+  color: var(--muted);
+  margin-top: 3px;
+}
+
+.workflow-form {
+  border-top: 1px solid var(--line);
+  margin-top: 18px;
+  padding-top: 16px;
+}
+
+.workflow-form h3 {
+  margin: 0 0 10px;
+}
+
+.workflow-action {
+  margin-top: 18px;
+}
+
+.attachment-link {
+  display: block;
+  margin: 4px 0;
+}
+
 .st-aberto {
   background: #f3e3c7;
   color: #7a4e12;

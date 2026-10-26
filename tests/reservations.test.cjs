@@ -60,3 +60,24 @@ test('collaborator view contains only own booking details; admin sees client tot
   assert.match(admin, /Cliente Bia/);
   assert.match(admin, /Reuniões por advogado e cliente/);
 });
+
+test('login reports authentication failures separately from workspace loading failures', async () => {
+  const authFailure = appContext();
+  vm.runInContext(`
+    db = { auth: { signInWithPassword: async () => ({ error: new Error('Failed to fetch') }) } };
+  `, authFailure);
+  await vm.runInContext('login("user@example.com", "password")', authFailure);
+  assert.match(vm.runInContext('flashError', authFailure), /Falha ao autenticar no Supabase: Failed to fetch/);
+
+  const workspaceFailure = appContext();
+  vm.runInContext(`
+    db = {
+      auth: {
+        signInWithPassword: async () => ({ error: null }),
+        getUser: async () => ({ error: new Error('Failed to fetch') }),
+      },
+    };
+  `, workspaceFailure);
+  await vm.runInContext('login("user@example.com", "password")', workspaceFailure);
+  assert.match(vm.runInContext('flashError', workspaceFailure), /Autenticação concluída, mas falhou ao carregar os dados do Help Desk: Failed to fetch/);
+});

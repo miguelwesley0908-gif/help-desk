@@ -28,8 +28,8 @@ const handleUpdateUser = withSupabase({ auth: "user" }, async (request, context)
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) {
     return respond({ error: "Selecione uma conta válida." }, 400);
   }
-  if (!["colaborador", "atendente", "coordenador"].includes(role)) {
-    return respond({ error: "Escolha Colaborador, Atendente ou Coordenador." }, 400);
+  if (!["colaborador", "atendente", "financeiro", "coordenador"].includes(role)) {
+    return respond({ error: "Escolha Colaborador, Atendente, Financeiro ou Coordenador." }, 400);
   }
   if (userId === adminId) return respond({ error: "Você não pode alterar o próprio perfil." }, 400);
 

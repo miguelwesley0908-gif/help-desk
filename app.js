@@ -6,6 +6,7 @@ const CATEGORY_LABELS = {
 };
 const PRIORITIES = ["baixa", "media", "alta", "urgente"];
 const STATUSES = ["aberto", "andamento", "aguardando", "resolvido", "encerrado"];
+const WORKFLOW_STEPS = ["triagem", "orcamento", "financeiro", "execucao", "resolvido"];
 const BOOKING_TIME_ZONE = "America/Sao_Paulo";
 const BOOKING_DURATIONS = [30, 60, 90, 120];
 const LABELS = {
@@ -13,10 +14,13 @@ const LABELS = {
   aberto: "Aberto", andamento: "Em andamento", aguardando: "Aguardando",
   resolvido: "Resolvido", encerrado: "Encerrado",
   colaborador: "Colaborador", atendente: "Atendente", admin: "Administração", coordenador: "Coordenador",
+  financeiro: "Financeiro",
+  triagem: "Aguardando responsável", orcamento: "Contato e orçamento", financeiro_etapa: "Aprovação financeira",
+  execucao: "Execução do serviço", fluxo_resolvido: "Fluxo resolvido",
 };
 
 let db = null;
-let state = { user: null, offices: [], users: [], tickets: [], rooms: [], bookings: [], busy: [], reservationsReady: false };
+let state = { user: null, offices: [], users: [], tickets: [], rooms: [], bookings: [], busy: [], notifications: [], reservationsReady: false };
 let reservationDate = dateInBookingZone();
 let reservationDuration = 60;
 let reservationOfficeId = null;
@@ -24,6 +28,7 @@ let adminBookingQuery = "";
 let adminBookingLawyerId = "";
 let selectedSlot = null;
 let availabilityRequest = 0;
+let notificationPoll = null;
 let route = parseHash();
 let flashError = "";
 let flashSuccess = "";
@@ -86,7 +91,7 @@ function currentUser() { return state.user; }
 function officeById(id) { return state.offices.find((office) => office.id === id); }
 function userById(id) { return state.users.find((user) => user.id === id); }
 function canAdminister(user) { return user?.role === "admin" || user?.role === "coordenador"; }
-function canEditTicket(user, ticket) { return canAdminister(user) || ticket?.assigneeId === user?.id; }
+function canEditTicket(user, ticket) { return canAdminister(user) || ticket?.assigneeId === user?.id || ticket?.workflowOwnerId === user?.id; }
 function visibleTickets(user) {
   return state.tickets.slice();
 }
@@ -102,9 +107,24 @@ function mapTicket(row) {
     id: row.id, number: `HD-${row.ticket_no}`, title: row.title, description: row.description,
     category: row.category, priority: row.priority, status: row.status, officeId: row.office_id,
     location: row.location || "",
-    requesterId: row.requester_id, assigneeId: row.assignee_id, createdAt: row.created_at,
+    requesterId: row.requester_id, assigneeId: row.assignee_id, workflowOwnerId: row.workflow_owner_id,
+    financialAssigneeId: row.financial_assignee_id, workflowStep: row.workflow_step || "triagem",
+    budgetAmount: row.budget_amount, financeDecision: row.finance_decision || "pendente",
+    financeNote: row.finance_note || "", createdAt: row.created_at,
     updatedAt: row.updated_at, comments: [], events: [],
+    attachments: [],
   };
+}
+
+async function refreshNotifications() {
+  if (!state.user || !db) return;
+  const result = await db.from("notifications").select("id,ticket_id,title,body,created_at,read_at").order("created_at", { ascending: false }).limit(30);
+  if (result.error) return;
+  const next = result.data || [];
+  if (JSON.stringify(next) !== JSON.stringify(state.notifications || [])) {
+    state.notifications = next;
+    render();
+  }
 }
 function mapRoom(row) {
   return { id: row.id, officeId: row.office_id, name: row.name, capacity: row.capacity, active: row.active };
@@ -129,7 +149,7 @@ async function loadWorkspace() {
   const { data: authData, error: authError } = await db.auth.getUser();
   if (authError) throw authError;
   if (!authData.user) {
-    state = { user: null, offices: [], users: [], tickets: [], rooms: [], bookings: [], busy: [], reservationsReady: false };
+    state = { user: null, offices: [], users: [], tickets: [], rooms: [], bookings: [], busy: [], notifications: [], reservationsReady: false };
     resetReservationSession();
     render();
     return;
@@ -142,12 +162,14 @@ async function loadWorkspace() {
     throw new Error("Sua conta foi autenticada, mas ainda não tem perfil cadastrado. Peça ao administrador para concluir seu acesso.");
   }
   const profile = profileResult.data;
-  const [officeRows, userRows, ticketRows, commentRows, eventRows] = await Promise.all([
+  const [officeRows, userRows, ticketRows, commentRows, eventRows, attachmentRows, notificationRows] = await Promise.all([
     db.from("offices").select("id,name,city,address").order("name"),
     db.from("profiles").select("id,name,role,office_id").order("name"),
-    db.from("tickets").select("id,ticket_no,title,description,category,priority,status,office_id,location,requester_id,assignee_id,created_at,updated_at").order("updated_at", { ascending: false }),
+    db.from("tickets").select("id,ticket_no,title,description,category,priority,status,office_id,location,requester_id,assignee_id,workflow_owner_id,financial_assignee_id,workflow_step,budget_amount,finance_decision,finance_note,created_at,updated_at").order("updated_at", { ascending: false }),
     db.from("ticket_comments").select("id,ticket_id,author_id,body,created_at").order("created_at"),
     db.from("ticket_events").select("id,ticket_id,actor_id,body,created_at").order("created_at"),
+    db.from("ticket_attachments").select("id,ticket_id,file_name,file_path,mime_type,file_size,created_at,uploader_id").order("created_at"),
+    db.from("notifications").select("id,ticket_id,title,body,created_at,read_at").order("created_at", { ascending: false }).limit(30),
   ]);
   state.offices = checkError(officeRows).map(mapOffice);
   state.users = checkError(userRows).map(mapUser);
@@ -160,6 +182,11 @@ async function loadWorkspace() {
     const ticket = state.tickets.find((item) => item.id === row.ticket_id);
     if (ticket) ticket.events.push({ id: row.id, authorId: row.actor_id, body: row.body, createdAt: row.created_at });
   }
+  for (const row of checkError(attachmentRows)) {
+    const ticket = state.tickets.find((item) => item.id === row.ticket_id);
+    if (ticket) ticket.attachments.push({ id: row.id, fileName: row.file_name, filePath: row.file_path, mimeType: row.mime_type, fileSize: row.file_size, createdAt: row.created_at, uploaderId: row.uploader_id });
+  }
+  state.notifications = checkError(notificationRows);
   state.user = mapUser(profile);
   if (!reservationOfficeId) reservationOfficeId = state.user.officeId;
   await loadReservationData();
@@ -238,9 +265,21 @@ async function login(email, password) {
   try {
     const result = await db.auth.signInWithPassword({ email: email.trim(), password });
     if (result.error) throw result.error;
+  } catch (error) {
+    const message = error?.message || "Não foi possível concluir a autenticação.";
+    showError(new Error(`Falha ao autenticar no Supabase: ${message}`));
+    return;
+  }
+
+  try {
     await loadWorkspace();
-    if (state.user) go("/dashboard");
-  } catch (error) { showError(error); }
+  } catch (error) {
+    const message = error?.message || "Não foi possível carregar os dados do sistema.";
+    showError(new Error(`Autenticação concluída, mas falhou ao carregar os dados do Help Desk: ${message}`));
+    return;
+  }
+
+  if (state.user) go("/dashboard");
 }
 
 async function logout() {
@@ -268,13 +307,85 @@ async function createTicket(payload) {
 }
 
 async function updateTicket(id, patch) {
-  const row = {
-    status: patch.status, priority: patch.priority,
-  };
+  const row = {};
+  if (Object.hasOwn(patch, "status")) row.status = patch.status;
+  if (Object.hasOwn(patch, "priority")) row.priority = patch.priority;
   if (Object.hasOwn(patch, "assigneeId")) row.assignee_id = patch.assigneeId || null;
+  if (Object.hasOwn(patch, "workflowOwnerId")) row.workflow_owner_id = patch.workflowOwnerId || null;
+  if (Object.hasOwn(patch, "financialAssigneeId")) row.financial_assignee_id = patch.financialAssigneeId || null;
   try {
     checkError(await db.from("tickets").update(row).eq("id", id).select("id").single());
     await loadWorkspace();
+  } catch (error) { showError(error); }
+}
+
+async function submitQuoteForApproval(id, amount, file) {
+  const ticket = state.tickets.find((item) => item.id === id);
+  if (!ticket?.workflowOwnerId || !ticket.financialAssigneeId) return showError(new Error("Atribua Andreza e uma pessoa do Financeiro antes de encaminhar o orçamento."));
+  const parsedAmount = Number(String(amount).replace(",", "."));
+  if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) return showError(new Error("Informe um valor de orçamento válido."));
+  if (!file) return showError(new Error("Anexe o orçamento recebido do Thomas."));
+  if (file.size > 10 * 1024 * 1024) return showError(new Error("O arquivo deve ter no máximo 10 MB."));
+  flashError = "";
+  try {
+    const filePath = `${id}/${crypto.randomUUID()}-${file.name.replace(/[^\p{L}\p{N}._-]/gu, "_")}`;
+    checkError(await db.storage.from("ticket-files").upload(filePath, file, { contentType: file.type || "application/octet-stream", upsert: false }));
+    checkError(await db.from("ticket_attachments").insert({ ticket_id: id, uploader_id: currentUser().id, file_name: file.name, file_path: filePath, mime_type: file.type || "application/octet-stream", file_size: file.size }));
+    checkError(await db.from("tickets").update({ workflow_step: "financeiro", status: "aguardando", budget_amount: parsedAmount, finance_decision: "pendente", finance_note: "", assignee_id: ticket.financialAssigneeId }).eq("id", id).select("id").single());
+    flashSuccess = "Orçamento encaminhado ao Financeiro.";
+    await loadWorkspace();
+  } catch (error) { showError(error); }
+}
+
+async function decideQuote(id, approved, note) {
+  const ticket = state.tickets.find((item) => item.id === id);
+  if (!ticket) return;
+  const decision = approved ? "aprovado" : "rejeitado";
+  if (!approved && !note.trim()) return showError(new Error("Informe o motivo da rejeição para Andreza."));
+  try {
+    checkError(await db.from("tickets").update({
+      workflow_step: approved ? "execucao" : "orcamento",
+      status: approved ? "andamento" : "aguardando",
+      finance_decision: decision,
+      finance_note: note.trim(),
+      assignee_id: ticket.workflowOwnerId,
+    }).eq("id", id).select("id").single());
+    flashSuccess = approved ? "Orçamento aprovado e devolvido à Andreza para combinar o serviço." : "Orçamento rejeitado e devolvido à Andreza.";
+    await loadWorkspace();
+  } catch (error) { showError(error); }
+}
+
+async function completeWorkflowTicket(id) {
+  try {
+    checkError(await db.from("tickets").update({ workflow_step: "resolvido", status: "resolvido" }).eq("id", id).select("id").single());
+    flashSuccess = "Chamado marcado como resolvido.";
+    await loadWorkspace();
+  } catch (error) { showError(error); }
+}
+
+async function startWorkflowTicket(id) {
+  const ticket = state.tickets.find((item) => item.id === id);
+  if (!ticket?.workflowOwnerId) return showError(new Error("Atribua Andreza como responsável pelo fluxo primeiro."));
+  try {
+    checkError(await db.from("tickets").update({ workflow_step: "orcamento", status: "andamento", assignee_id: ticket.workflowOwnerId }).eq("id", id).select("id").single());
+    flashSuccess = "Chamado atribuído à Andreza para contato com Thomas.";
+    await loadWorkspace();
+  } catch (error) { showError(error); }
+}
+
+async function markNotificationRead(id) {
+  try {
+    checkError(await db.from("notifications").update({ read_at: now() }).eq("id", id).is("read_at", null));
+    state.notifications = state.notifications.map((item) => item.id === id ? { ...item, read_at: now() } : item);
+    render();
+  } catch (error) { showError(error); }
+}
+
+async function openAttachment(filePath) {
+  try {
+    const { data, error } = await db.storage.from("ticket-files").createSignedUrl(filePath, 60);
+    if (error) throw error;
+    location.assign(data.signedUrl);
   } catch (error) { showError(error); }
 }
 
@@ -460,6 +571,7 @@ function badgeStatus(status) { return `<span class="badge st-${escapeHtml(status
 function badgePriority(priority) { return `<span class="badge pr-${escapeHtml(priority)}">${LABELS[priority] || escapeHtml(priority)}</span>`; }
 
 function layout(user, title, actions, content) {
+  const unreadNotifications = (state.notifications || []).filter((item) => !item.read_at);
   return `
     <div class="shell">
       <aside class="sidebar">
@@ -476,6 +588,7 @@ function layout(user, title, actions, content) {
       </aside>
       <main class="main">
         <div class="topbar"><div><div class="hint" style="margin:0 0 4px">Help Desk dos Escritórios</div><h1>${escapeHtml(title)}</h1></div><div>${actions || ""}</div></div>
+        ${(state.notifications || []).length ? `<section class="notification-panel"><strong>Notificações${unreadNotifications.length ? ` · ${unreadNotifications.length} nova(s)` : ""}</strong><div>${state.notifications.slice(0, 5).map((item) => `<button class="notification-item ${item.read_at ? "" : "unread"}" type="button" data-notification-id="${escapeHtml(item.id)}" data-notification-ticket="${escapeHtml(item.ticket_id)}"><span>${escapeHtml(item.title)}</span><small>${escapeHtml(item.body)} · ${formatDate(item.created_at)}</small></button>`).join("")}</div></section>` : ""}
         ${flashError ? `<p class="error" role="alert">${escapeHtml(flashError)}</p>` : ""}
         ${flashSuccess ? `<p class="hint" role="status">${escapeHtml(flashSuccess)}</p>` : ""}
         ${content}
@@ -643,7 +756,7 @@ function renderDashboard(user) {
   const tickets = visibleTickets(user);
   const openish = tickets.filter((ticket) => ["aberto", "andamento", "aguardando"].includes(ticket.status));
   const urgent = tickets.filter((ticket) => ticket.priority === "urgente" && ticket.status !== "encerrado");
-  const mine = tickets.filter((ticket) => ticket.assigneeId === user.id && !["resolvido", "encerrado"].includes(ticket.status));
+  const mine = tickets.filter((ticket) => (ticket.assigneeId === user.id || ticket.workflowOwnerId === user.id) && !["resolvido", "encerrado"].includes(ticket.status));
   const recent = tickets.slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 6);
   return layout(user, "Painel", `<button class="btn copper" data-go="/new">Novo chamado</button>`, `
     <section class="kpis"><article class="kpi"><span>Abertos na fila</span><strong>${openish.length}</strong></article><article class="kpi"><span>Urgentes</span><strong>${urgent.length}</strong></article><article class="kpi"><span>Comigo</span><strong>${mine.length}</strong></article><article class="kpi"><span>Escritórios</span><strong>${state.offices.length}</strong></article></section>
@@ -704,14 +817,20 @@ function renderTicket(user) {
   const requester = userById(ticket.requesterId);
   const assignee = userById(ticket.assigneeId);
   const mayEdit = canEditTicket(user, ticket);
+  const isOwner = ticket.workflowOwnerId === user.id || canAdminister(user);
+  const workflowStepLabel = { triagem: "Aguardando atribuição", orcamento: "Contato com Thomas e orçamento", financeiro: "Aprovação do Financeiro", execucao: "Serviço aprovado, aguardando execução", resolvido: "Fluxo concluído" }[ticket.workflowStep] || ticket.workflowStep;
+  const teamAssignees = state.users.filter((item) => ["atendente", "financeiro", "admin", "coordenador"].includes(item.role));
   return layout(user, ticket.number, `<button class="btn secondary" data-go="/tickets">Voltar à fila</button>`, `
     <div class="grid-2"><section class="detail"><h2 style="font-family:Fraunces,serif;margin:0 0 8px">${escapeHtml(ticket.title)}</h2><p>${escapeHtml(ticket.description)}</p><h3>Histórico</h3>
       <div class="comments">${renderTimeline(ticket)}</div>${mayEdit ? `<form id="comment-form"><div class="field"><label for="body">Nova atualização</label><textarea id="body" name="body" required placeholder="O que mudou?"></textarea></div><button class="btn" type="submit">Publicar</button></form>` : `<p class="hint">Somente a pessoa responsável pode comentar neste chamado.</p>`}
-    </section><aside class="detail"><dl class="meta-list"><div><span>Status</span>${badgeStatus(ticket.status)}</div><div><span>Prioridade</span>${badgePriority(ticket.priority)}</div><div><span>Categoria</span><span>${escapeHtml(ticket.category)}</span></div><div><span>Escritório</span><span>${escapeHtml(officeById(ticket.officeId)?.name || "—")}</span></div>${ticket.location ? `<div><span>Local</span><span>${escapeHtml(ticket.location)}</span></div>` : ""}<div><span>Solicitante</span><span>${escapeHtml(requester?.name || "—")}</span></div><div><span>Atendente</span><span>${escapeHtml(assignee?.name || "Fila livre")}</span></div><div><span>Aberto</span><span>${formatDate(ticket.createdAt)}</span></div></dl>
-      ${mayEdit ? `<form id="manage-form" style="margin-top:18px"><div class="field"><label>Mover status</label><select name="status">${STATUSES.map((value) => `<option value="${value}" ${ticket.status === value ? "selected" : ""}>${LABELS[value]}</option>`).join("")}</select></div>
-      <div class="field"><label>Prioridade</label><select name="priority">${PRIORITIES.map((value) => `<option value="${value}" ${ticket.priority === value ? "selected" : ""}>${LABELS[value]}</option>`).join("")}</select></div>
-      ${canAdminister(user) ? `<div class="field"><label>Atribuir</label><select name="assigneeId"><option value="">Fila livre</option>${state.users.filter((item) => item.role !== "colaborador").map((item) => `<option value="${item.id}" ${ticket.assigneeId === item.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></div>` : ""}
-      <button class="btn copper full" type="submit">Salvar alterações</button></form>` : ""}</aside></div>`);
+    </section><aside class="detail"><dl class="meta-list"><div><span>Etapa do fluxo</span><strong>${escapeHtml(workflowStepLabel)}</strong></div><div><span>Status</span>${badgeStatus(ticket.status)}</div><div><span>Prioridade</span>${badgePriority(ticket.priority)}</div><div><span>Categoria</span><span>${escapeHtml(ticket.category)}</span></div><div><span>Escritório</span><span>${escapeHtml(officeById(ticket.officeId)?.name || "—")}</span></div>${ticket.location ? `<div><span>Local</span><span>${escapeHtml(ticket.location)}</span></div>` : ""}<div><span>Solicitante</span><span>${escapeHtml(requester?.name || "—")}</span></div><div><span>Responsável atual</span><span>${escapeHtml(assignee?.name || "Fila livre")}</span></div><div><span>Andreza acompanha</span><span>${escapeHtml(userById(ticket.workflowOwnerId)?.name || "Não atribuída")}</span></div><div><span>Financeiro</span><span>${escapeHtml(userById(ticket.financialAssigneeId)?.name || "Não atribuído")}</span></div>${ticket.budgetAmount ? `<div><span>Orçamento</span><span>${Number(ticket.budgetAmount).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</span></div>` : ""}${ticket.financeDecision !== "pendente" ? `<div><span>Decisão financeira</span><span>${ticket.financeDecision === "aprovado" ? "Aprovado" : "Rejeitado"}${ticket.financeNote ? ` — ${escapeHtml(ticket.financeNote)}` : ""}</span></div>` : ""}<div><span>Aberto</span><span>${formatDate(ticket.createdAt)}</span></div></dl>
+      ${canAdminister(user) ? `<form id="manage-form" style="margin-top:18px"><h3>Responsáveis do fluxo</h3><div class="field"><label>Andreza acompanha o chamado</label><select name="workflowOwnerId"><option value="">Selecione Andreza</option>${teamAssignees.filter((item) => item.role !== "financeiro").map((item) => `<option value="${item.id}" ${ticket.workflowOwnerId === item.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></div><div class="field"><label>Responsável do Financeiro</label><select name="financialAssigneeId"><option value="">Selecione Financeiro</option>${state.users.filter((item) => item.role === "financeiro").map((item) => `<option value="${item.id}" ${ticket.financialAssigneeId === item.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></div><div class="field"><label>Responsável atual</label><select name="assigneeId"><option value="">Fila livre</option>${teamAssignees.map((item) => `<option value="${item.id}" ${ticket.assigneeId === item.id ? "selected" : ""}>${escapeHtml(item.name)} · ${LABELS[item.role]}</option>`).join("")}</select></div><div class="field"><label>Prioridade</label><select name="priority">${PRIORITIES.map((value) => `<option value="${value}" ${ticket.priority === value ? "selected" : ""}>${LABELS[value]}</option>`).join("")}</select></div><button class="btn copper full" type="submit">Salvar responsáveis</button></form>` : ""}
+      ${ticket.workflowStep === "triagem" && isOwner ? `<button class="btn copper full workflow-action" type="button" data-workflow-start="${ticket.id}">Iniciar contato e pedir orçamento</button>` : ""}
+      ${ticket.workflowStep === "orcamento" && isOwner ? `<form id="quote-form" class="workflow-form"><h3>Enviar orçamento ao Financeiro</h3><p class="hint">Registre o valor e anexe o orçamento recebido do Thomas.</p><div class="field"><label>Valor (R$)</label><input name="amount" type="number" min="0.01" step="0.01" required /></div><div class="field"><label>Arquivo do orçamento</label><input name="quote" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,application/pdf,image/jpeg,image/png,image/webp" required /></div><button class="btn copper full" type="submit">Encaminhar para aprovação</button></form>` : ""}
+      ${ticket.workflowStep === "financeiro" && user.role === "financeiro" && ticket.assigneeId === user.id ? `<form id="finance-form" class="workflow-form"><h3>Decisão do Financeiro</h3><div class="field"><label>Observação (obrigatória para rejeitar)</label><textarea name="note" placeholder="Motivo da decisão"></textarea></div><div class="filters"><button class="btn copper" type="button" data-finance-decision="approve">Aprovar</button><button class="btn secondary" type="button" data-finance-decision="reject">Rejeitar</button></div></form>` : ""}
+      ${ticket.workflowStep === "execucao" && isOwner ? `<section class="workflow-form"><h3>Após a execução por Thomas</h3><p class="hint">Quando Thomas concluir o serviço, confirme para resolver o chamado.</p><button class="btn copper full" type="button" data-workflow-complete="${ticket.id}">Confirmar serviço e resolver</button></section>` : ""}
+      ${ticket.attachments.length ? `<section class="workflow-form"><h3>Orçamentos e arquivos</h3>${ticket.attachments.map((item) => `<button class="attachment-link" type="button" data-attachment-path="${escapeHtml(item.filePath)}">${escapeHtml(item.fileName)} · ${formatDate(item.createdAt)}</button>`).join("")}</section>` : ""}
+    </aside></div>`);
 }
 
 function renderOffices(user) {
@@ -724,7 +843,7 @@ function renderOffices(user) {
 function renderUsers(user) {
   if (!canAdminister(user)) return layout(user, "Equipe", "", `<div class="empty">Somente a administração e a coordenação podem cadastrar pessoas.</div>`);
   const teamRows = state.users.map((person) => `
-    <tr><td>${escapeHtml(person.name)}</td><td>${person.id !== user.id && person.role !== "admin" ? `<select data-user-role="${person.id}" aria-label="Perfil de ${escapeHtml(person.name)}"><option value="colaborador" ${person.role === "colaborador" ? "selected" : ""}>Colaborador</option><option value="atendente" ${person.role === "atendente" ? "selected" : ""}>Atendente</option><option value="coordenador" ${person.role === "coordenador" ? "selected" : ""}>Coordenador</option></select>` : LABELS[person.role] || escapeHtml(person.role)}</td><td>${escapeHtml(officeById(person.officeId)?.name || "—")}</td><td class="user-actions">${person.id !== user.id && person.role !== "admin" ? `<button class="btn secondary small-btn" type="button" data-save-user-role="${person.id}">Salvar perfil</button>${person.role !== "coordenador" ? `<button class="delete-user-button" type="button" data-delete-user="${escapeHtml(person.id)}" aria-label="Excluir conta de ${escapeHtml(person.name)}" title="Excluir conta"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6m4-6v6M5 7l1 14h12l1-14M9 7V4h6v3" /></svg></button>` : ""}` : ""}</td></tr>
+    <tr><td>${escapeHtml(person.name)}</td><td>${person.id !== user.id && person.role !== "admin" ? `<select data-user-role="${person.id}" aria-label="Perfil de ${escapeHtml(person.name)}"><option value="colaborador" ${person.role === "colaborador" ? "selected" : ""}>Colaborador</option><option value="atendente" ${person.role === "atendente" ? "selected" : ""}>Atendente</option><option value="financeiro" ${person.role === "financeiro" ? "selected" : ""}>Financeiro</option><option value="coordenador" ${person.role === "coordenador" ? "selected" : ""}>Coordenador</option></select>` : LABELS[person.role] || escapeHtml(person.role)}</td><td>${escapeHtml(officeById(person.officeId)?.name || "—")}</td><td class="user-actions">${person.id !== user.id && person.role !== "admin" ? `<button class="btn secondary small-btn" type="button" data-save-user-role="${person.id}">Salvar perfil</button>${person.role !== "coordenador" ? `<button class="delete-user-button" type="button" data-delete-user="${escapeHtml(person.id)}" aria-label="Excluir conta de ${escapeHtml(person.name)}" title="Excluir conta"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6m4-6v6M5 7l1 14h12l1-14M9 7V4h6v3" /></svg></button>` : ""}` : ""}</td></tr>
   `).join("");
   return layout(user, "Equipe", "", `
     <div class="grid-2">
@@ -738,7 +857,7 @@ function renderUsers(user) {
         <div class="field"><label for="user-name">Nome</label><input id="user-name" name="name" required maxlength="100" autocomplete="name" /></div>
         <div class="field"><label for="user-email">E-mail de trabalho</label><input id="user-email" name="email" type="email" required maxlength="254" autocomplete="email" /></div>
         <div class="field"><label for="user-password">Senha inicial</label><input id="user-password" name="password" type="password" required minlength="8" maxlength="72" autocomplete="new-password" /><small class="hint">Use pelo menos 8 caracteres e entregue a senha à pessoa por um canal seguro.</small></div>
-        <div class="field"><label for="user-role">Perfil</label><select id="user-role" name="role"><option value="colaborador">Colaborador</option><option value="atendente">Atendente</option><option value="coordenador">Coordenador</option></select></div>
+        <div class="field"><label for="user-role">Perfil</label><select id="user-role" name="role"><option value="colaborador">Colaborador</option><option value="atendente">Atendente</option><option value="financeiro">Financeiro</option><option value="coordenador">Coordenador</option></select></div>
         <button class="btn copper full" type="submit">Criar conta</button>
       </form>
     </div>
@@ -746,6 +865,11 @@ function renderUsers(user) {
 }
 
 function bind() {
+  document.querySelectorAll("[data-notification-id]").forEach((element) => element.addEventListener("click", async () => {
+    const ticketId = element.dataset.notificationTicket;
+    await markNotificationRead(element.dataset.notificationId);
+    if (ticketId) go(`/tickets/${ticketId}`);
+  }));
   document.querySelectorAll("[data-save-user-role]").forEach((element) => element.addEventListener("click", () => {
     const select = document.querySelector(`[data-user-role="${element.dataset.saveUserRole}"]`);
     if (select) updateEmployeeRole(element.dataset.saveUserRole, select.value);
@@ -788,6 +912,13 @@ function bind() {
   });
   document.querySelectorAll("[data-cancel-booking]").forEach((element) => element.addEventListener("click", () => {
     if (window.confirm("Cancelar esta reserva?")) cancelBooking(element.dataset.cancelBooking);
+  }));
+  document.querySelectorAll("[data-workflow-start]").forEach((element) => element.addEventListener("click", () => startWorkflowTicket(element.dataset.workflowStart)));
+  document.querySelectorAll("[data-workflow-complete]").forEach((element) => element.addEventListener("click", () => completeWorkflowTicket(element.dataset.workflowComplete)));
+  document.querySelectorAll("[data-attachment-path]").forEach((element) => element.addEventListener("click", () => openAttachment(element.dataset.attachmentPath)));
+  document.querySelectorAll("[data-finance-decision]").forEach((element) => element.addEventListener("click", () => {
+    const note = document.querySelector('#finance-form [name="note"]')?.value || "";
+    decideQuote(route.id, element.dataset.financeDecision === "approve", note);
   }));
   document.querySelectorAll("[data-room-toggle]").forEach((element) => element.addEventListener("click", () => {
     setRoomActive(element.dataset.roomToggle, element.dataset.roomActive === "true");
@@ -851,9 +982,14 @@ function bind() {
   const manageForm = document.getElementById("manage-form");
   manageForm?.addEventListener("submit", (event) => {
     event.preventDefault(); const data = new FormData(manageForm);
-    const patch = { status: String(data.get("status")), priority: String(data.get("priority")) };
+    const patch = { priority: String(data.get("priority")), workflowOwnerId: String(data.get("workflowOwnerId")), financialAssigneeId: String(data.get("financialAssigneeId")) };
     if (data.has("assigneeId")) patch.assigneeId = String(data.get("assigneeId")) || null;
     updateTicket(route.id, patch);
+  });
+  const quoteForm = document.getElementById("quote-form");
+  quoteForm?.addEventListener("submit", (event) => {
+    event.preventDefault(); const data = new FormData(quoteForm);
+    submitQuoteForApproval(route.id, String(data.get("amount")), data.get("quote"));
   });
   const officeForm = document.getElementById("office-form");
   officeForm?.addEventListener("submit", (event) => {
@@ -914,6 +1050,7 @@ async function boot() {
   if (!window.supabase || !window.HEKP_SUPABASE?.url || !window.HEKP_SUPABASE?.publishableKey) { loading = false; render(); return; }
   try {
     db = window.supabase.createClient(window.HEKP_SUPABASE.url, window.HEKP_SUPABASE.publishableKey);
+    if (!notificationPoll) notificationPoll = window.setInterval(refreshNotifications, 30000);
     const { data, error } = await db.auth.getSession();
     if (error) throw error;
     if (data.session) await loadWorkspace();

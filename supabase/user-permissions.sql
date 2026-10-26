@@ -3,7 +3,7 @@
 
 alter table public.profiles drop constraint if exists profiles_role_check;
 alter table public.profiles add constraint profiles_role_check
-  check (role in ('colaborador', 'atendente', 'coordenador', 'admin'));
+  check (role in ('colaborador', 'atendente', 'financeiro', 'coordenador', 'admin'));
 
 create or replace function public.prevent_ticket_reassignment_by_assignee()
 returns trigger language plpgsql set search_path = ''
