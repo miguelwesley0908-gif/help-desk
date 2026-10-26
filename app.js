@@ -1,7 +1,7 @@
 const CATEGORIES = ["TI", "Infraestrutura", "Financeiro"];
 const CATEGORY_LABELS = {
-  TI: "TI — sistemas, computadores e internet",
-  Infraestrutura: "Infraestrutura — móveis, cabos e periféricos danificados",
+  TI: "TI — cabos, periféricos, computadores e internet",
+  Infraestrutura: "Infraestrutura — estrutura física, cadeiras, mesas e ar-condicionado",
   Financeiro: "Financeiro — assuntos do departamento",
 };
 const PRIORITIES = ["baixa", "media", "alta", "urgente"];
@@ -294,11 +294,12 @@ async function logout() {
 
 async function createTicket(payload) {
   const user = currentUser();
-  const officeId = user.role === "colaborador" ? user.officeId : payload.officeId;
+  const assigneeId = payload.assigneeId || null;
   try {
     const result = await db.from("tickets").insert({
       title: payload.title.trim(), description: payload.description.trim(), category: payload.category,
-      priority: payload.priority, office_id: officeId, location: payload.location.trim() || null, requester_id: user.id,
+      priority: payload.priority, office_id: user.officeId, location: payload.location.trim() || null,
+      requester_id: user.id, assignee_id: assigneeId, workflow_owner_id: assigneeId,
     }).select("id").single();
     const ticket = checkError(result);
     await loadWorkspace();
@@ -789,16 +790,15 @@ function renderTickets(user) {
 }
 
 function renderNew(user) {
-  const offices = user.role === "colaborador" ? state.offices.filter((item) => item.id === user.officeId) : state.offices;
+  const assignees = state.users.filter((item) => ["atendente", "coordenador", "admin"].includes(item.role));
   return layout(user, "Abrir chamado", "", `<form class="card" id="ticket-form" style="width:min(640px,100%)">
-    <p class="hint">TI para falhas de tecnologia; Infraestrutura para reparo ou troca de itens físicos; Financeiro para assuntos do departamento.</p>
+    <p class="hint">TI para cabos, periféricos e falhas de tecnologia; Infraestrutura para a estrutura física, como cadeiras, mesas e ar-condicionado; Financeiro para assuntos do departamento.</p>
     <div class="field"><label for="title">Título</label><input id="title" name="title" required maxlength="90" placeholder="Ex.: Impressora da recepção sem papel" /></div>
     <div class="field"><label for="description">Descrição</label><textarea id="description" name="description" required placeholder="O que aconteceu, desde quando e quem foi afetado."></textarea></div>
-    <div class="field"><label for="location">Local dentro do escritório (opcional)</label><input id="location" name="location" maxlength="120" placeholder="Ex.: 2º andar, sala de reuniões ou mesa 12" /></div>
+    <div class="field"><label for="location">Local (opcional)</label><input id="location" name="location" maxlength="120" placeholder="Ex.: sala de reuniões ou mesa 12" /></div>
     <div class="filters"><div class="field"><label>Categoria</label><select name="category">${CATEGORIES.map((value) => `<option value="${value}">${CATEGORY_LABELS[value]}</option>`).join("")}</select></div>
       <div class="field"><label>Prioridade</label><select name="priority">${PRIORITIES.map((value) => `<option value="${value}">${LABELS[value]}</option>`).join("")}</select></div>
-      <div class="field"><label>Escritório</label><select name="officeId" ${user.role === "colaborador" ? "disabled" : ""}>${offices.map((item) => `<option value="${item.id}" ${item.id === user.officeId ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select>
-      ${user.role === "colaborador" ? `<input type="hidden" name="officeId" value="${escapeHtml(user.officeId)}" />` : ""}</div></div>
+      <div class="field"><label for="ticket-assignee">Atribuir a</label><select id="ticket-assignee" name="assigneeId" required><option value="">Selecione uma pessoa</option>${assignees.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)} · ${escapeHtml(LABELS[item.role] || item.role)}</option>`).join("")}</select></div></div>
     <button class="btn copper" type="submit">Registrar chamado</button></form>`);
 }
 
@@ -975,7 +975,7 @@ function bind() {
   const ticketForm = document.getElementById("ticket-form");
   ticketForm?.addEventListener("submit", (event) => {
     event.preventDefault(); const data = new FormData(ticketForm);
-    createTicket({ title: String(data.get("title")), description: String(data.get("description")), category: String(data.get("category")), priority: String(data.get("priority")), officeId: String(data.get("officeId")), location: String(data.get("location")) });
+    createTicket({ title: String(data.get("title")), description: String(data.get("description")), category: String(data.get("category")), priority: String(data.get("priority")), assigneeId: String(data.get("assigneeId")), location: String(data.get("location")) });
   });
   const commentForm = document.getElementById("comment-form");
   commentForm?.addEventListener("submit", (event) => { event.preventDefault(); addComment(route.id, String(new FormData(commentForm).get("body"))); });

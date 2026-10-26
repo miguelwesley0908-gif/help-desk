@@ -60,6 +60,8 @@ As regras também são aplicadas no Supabase, então esconder um botão no naveg
 
 Depois das migrações acima, execute [`supabase/ticket-workflow.sql`](supabase/ticket-workflow.sql) no SQL Editor. Ela adiciona as etapas do fluxo, o perfil Financeiro, anexos privados, notificações internas, validações e políticas RLS. Para cadastrar pessoas do Financeiro pela tela **Equipe**, publique novamente as Edge Functions `create-user` e `update-user` usando os arquivos atualizados em `supabase/functions/`.
 
+Em seguida, execute [`supabase/ticket-assignment.sql`](supabase/ticket-assignment.sql). Na abertura do chamado, quem solicita escolhe uma pessoa responsável; o escritório fica oculto e é preenchido automaticamente pelo perfil de quem abriu o chamado.
+
 1. Em **Equipe**, crie o usuário da Andreza com perfil **Atendente** e o usuário do Financeiro com perfil **Financeiro**. Use contas separadas da sua conta de administração.
 2. No chamado, administração ou coordenação escolhe Andreza como responsável contínua, escolhe a pessoa do Financeiro e inicia o contato. Andreza continua acompanhando mesmo quando o Financeiro assume a etapa.
 3. Andreza contata Thomas fora do app, anexa o orçamento em PDF ou imagem e informa o valor. O chamado passa ao Financeiro.

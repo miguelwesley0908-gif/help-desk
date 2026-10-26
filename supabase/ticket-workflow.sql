@@ -237,6 +237,8 @@ create policy "Users can open permitted tickets" on public.tickets for insert to
 with check (requester_id = (select auth.uid()) and (
   (public.current_app_role() = 'colaborador' and office_id = public.current_app_office()) or
   public.current_app_role() in ('atendente', 'financeiro', 'admin', 'coordenador')
+) and assignee_id is not null and workflow_owner_id = assignee_id and exists (
+  select 1 from public.profiles p where p.id = assignee_id and p.role in ('atendente', 'coordenador', 'admin')
 ));
 drop policy if exists "Staff can triage tickets" on public.tickets;
 create policy "Staff can triage tickets" on public.tickets for update to authenticated
@@ -253,6 +255,7 @@ with check (author_id = (select auth.uid()) and exists (
 
 grant select on public.ticket_attachments, public.notifications to authenticated;
 grant insert (ticket_id, uploader_id, file_name, file_path, mime_type, file_size) on public.ticket_attachments to authenticated;
+grant insert (title, description, category, priority, office_id, location, requester_id, assignee_id, workflow_owner_id) on public.tickets to authenticated;
 grant update (read_at) on public.notifications to authenticated;
 grant update (status, priority, assignee_id, workflow_owner_id, financial_assignee_id, workflow_step, budget_amount, finance_decision, finance_note) on public.tickets to authenticated;
 
