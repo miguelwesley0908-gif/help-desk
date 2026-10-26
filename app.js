@@ -29,6 +29,7 @@ let adminBookingLawyerId = "";
 let selectedSlot = null;
 let availabilityRequest = 0;
 let notificationPoll = null;
+let notificationRequestGeneration = 0;
 let route = parseHash();
 let flashError = "";
 let flashSuccess = "";
@@ -116,9 +117,10 @@ function mapTicket(row) {
 
 async function refreshNotifications() {
   if (!state.user || !db) return;
+  const requestGeneration = ++notificationRequestGeneration;
   const result = await db.from("notifications").select("id,ticket_id,title,body,created_at,read_at").is("read_at", null).order("created_at", { ascending: false }).limit(30);
-  if (result.error) return;
-  const next = result.data || [];
+  if (result.error || requestGeneration !== notificationRequestGeneration) return;
+  const next = (result.data || []).filter((item) => !item.read_at);
   if (JSON.stringify(next) !== JSON.stringify(state.notifications || [])) {
     state.notifications = next;
     render();
@@ -160,6 +162,7 @@ async function loadWorkspace() {
     throw new Error("Sua conta foi autenticada, mas ainda não tem perfil cadastrado. Peça ao administrador para concluir seu acesso.");
   }
   const profile = profileResult.data;
+  const notificationLoadRequest = ++notificationRequestGeneration;
   const [userRows, ticketRows, commentRows, eventRows, attachmentRows, notificationRows] = await Promise.all([
     db.from("profiles").select("id,name,role,office_id").order("name"),
     db.from("tickets").select("id,ticket_no,title,description,category,priority,status,office_id,location,requester_id,assignee_id,workflow_owner_id,financial_assignee_id,workflow_step,budget_amount,finance_decision,finance_note,created_at,updated_at").order("updated_at", { ascending: false }),
@@ -182,7 +185,8 @@ async function loadWorkspace() {
     const ticket = state.tickets.find((item) => item.id === row.ticket_id);
     if (ticket) ticket.attachments.push({ id: row.id, fileName: row.file_name, filePath: row.file_path, mimeType: row.mime_type, fileSize: row.file_size, createdAt: row.created_at, uploaderId: row.uploader_id });
   }
-  state.notifications = checkError(notificationRows);
+  const loadedNotifications = checkError(notificationRows).filter((item) => !item.read_at);
+  if (notificationLoadRequest === notificationRequestGeneration) state.notifications = loadedNotifications;
   state.user = mapUser(profile);
   if (!reservationOfficeId) reservationOfficeId = state.user.officeId;
   await loadReservationData();
@@ -388,11 +392,24 @@ async function startWorkflowTicket(id) {
 }
 
 async function markNotificationRead(id) {
+  notificationRequestGeneration++;
   try {
-    checkError(await db.from("notifications").update({ read_at: now() }).eq("id", id).is("read_at", null));
+    const result = await db.from("notifications").update({ read_at: now() }).eq("id", id).is("read_at", null).select("id").maybeSingle();
+    checkError(result);
+    if (!result.data) {
+      const current = await db.from("notifications").select("read_at").eq("id", id).maybeSingle();
+      checkError(current);
+      if (current.data?.read_at == null) throw new Error("Não foi possível salvar a leitura da notificação.");
+    }
+    notificationRequestGeneration++;
     state.notifications = state.notifications.filter((item) => item.id !== id);
     render();
-  } catch (error) { showError(error); }
+    return true;
+  } catch (error) {
+    notificationRequestGeneration++;
+    showError(error);
+    return false;
+  }
 }
 
 async function openAttachment(filePath) {
@@ -594,7 +611,7 @@ function layout(user, title, actions, content) {
       </aside>
       <main class="main">
         <div class="topbar"><div><div class="hint" style="margin:0 0 4px">Help Desk</div><h1>${escapeHtml(title)}</h1></div><div>${actions || ""}</div></div>
-        ${(state.notifications || []).length ? `<section class="notification-panel"><strong>Notificações${unreadNotifications.length ? ` · ${unreadNotifications.length} nova(s)` : ""}</strong><div>${state.notifications.slice(0, 5).map((item) => `<button class="notification-item ${item.read_at ? "" : "unread"}" type="button" data-notification-id="${escapeHtml(item.id)}" data-notification-ticket="${escapeHtml(item.ticket_id)}"><span>${escapeHtml(item.title)}</span><small>${escapeHtml(item.body)} · ${formatDate(item.created_at)}</small></button>`).join("")}</div></section>` : ""}
+        ${unreadNotifications.length ? `<section class="notification-panel"><strong>Notificações${unreadNotifications.length ? ` · ${unreadNotifications.length} nova(s)` : ""}</strong><div>${unreadNotifications.slice(0, 5).map((item) => `<button class="notification-item ${item.read_at ? "" : "unread"}" type="button" data-notification-id="${escapeHtml(item.id)}" data-notification-ticket="${escapeHtml(item.ticket_id)}"><span>${escapeHtml(item.title)}</span><small>${escapeHtml(item.body)} · ${formatDate(item.created_at)}</small></button>`).join("")}</div></section>` : ""}
         ${flashError ? `<p class="error" role="alert">${escapeHtml(flashError)}</p>` : ""}
         ${flashSuccess ? `<p class="hint" role="status">${escapeHtml(flashSuccess)}</p>` : ""}
         ${content}
@@ -862,8 +879,8 @@ function renderUsers(user) {
 function bind() {
   document.querySelectorAll("[data-notification-id]").forEach((element) => element.addEventListener("click", async () => {
     const ticketId = element.dataset.notificationTicket;
-    await markNotificationRead(element.dataset.notificationId);
-    if (ticketId) go(`/tickets/${ticketId}`);
+    const markedRead = await markNotificationRead(element.dataset.notificationId);
+    if (markedRead && ticketId) go(`/tickets/${ticketId}`);
   }));
   document.querySelectorAll("[data-delete-ticket]").forEach((element) => element.addEventListener("click", (event) => {
     event.stopPropagation();
