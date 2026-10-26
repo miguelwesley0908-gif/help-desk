@@ -279,7 +279,7 @@ async function login(email, password) {
     return;
   }
 
-  if (state.user) go("/dashboard");
+  if (state.user) go("/tickets");
 }
 
 async function logout() {
@@ -577,11 +577,9 @@ function layout(user, title, actions, content) {
     <div class="shell">
       <aside class="sidebar">
         <div class="brand-mark" style="margin:4px 8px 22px"><div class="logo-tile">H</div>Hekp Gesk</div>
-        <button class="nav-btn ${route.name === "dashboard" ? "active" : ""}" data-go="/dashboard">Painel</button>
         <button class="nav-btn ${route.name === "tickets" && !route.id ? "active" : ""}" data-go="/tickets">Chamados</button>
         <button class="nav-btn ${route.name === "new" ? "active" : ""}" data-go="/new">Abrir chamado</button>
         <button class="nav-btn ${route.name === "reservations" || route.name === "booking" ? "active" : ""}" data-go="/reservations">Reservas de salas</button>
-        <button class="nav-btn ${route.name === "offices" ? "active" : ""}" data-go="/offices">Escritórios</button>
         ${canAdminister(user) ? `<button class="nav-btn ${route.name === "users" ? "active" : ""}" data-go="/users">Equipe</button>` : ""}
         <div class="user-box"><strong>${escapeHtml(user.name)}</strong><br />${LABELS[user.role]} · ${escapeHtml(officeById(user.officeId)?.city || "")}
           <button type="button" id="logout">Sair</button>
@@ -1031,10 +1029,8 @@ function render() {
   else if (route.name === "tickets" && route.id) root.innerHTML = renderTicket(user);
   else if (route.name === "tickets") root.innerHTML = renderTickets(user);
   else if (route.name === "new") root.innerHTML = renderNew(user);
-  else if (route.name === "offices") root.innerHTML = renderOffices(user);
   else if (route.name === "users") root.innerHTML = renderUsers(user);
-  else if (route.name === "dashboard") root.innerHTML = renderDashboard(user);
-  else { go("/dashboard"); return; }
+  else { go("/tickets"); return; }
   bind();
 }
 
