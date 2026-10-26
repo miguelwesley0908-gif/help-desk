@@ -73,7 +73,7 @@ drop policy if exists "Users can book active rooms" on public.room_bookings;
 create policy "Users can book active rooms" on public.room_bookings
 for insert to authenticated with check (
   organizer_id = (select auth.uid())
-  and public.current_app_role() in ('colaborador', 'atendente', 'admin', 'coordenador')
+  and public.current_app_role() in ('colaborador', 'financeiro', 'admin', 'coordenador')
   and starts_at > now()
   and exists (select 1 from public.meeting_rooms r where r.id = room_id and r.active)
 );

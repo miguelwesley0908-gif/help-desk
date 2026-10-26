@@ -14,7 +14,7 @@ create table if not exists public.offices (
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   name text not null,
-  role text not null check (role in ('colaborador', 'atendente', 'coordenador', 'admin')),
+  role text not null check (role in ('colaborador', 'financeiro', 'coordenador', 'admin')),
   office_id uuid not null references public.offices(id),
   created_at timestamptz not null default now()
 );
@@ -157,7 +157,7 @@ create policy "Users can open permitted tickets" on public.tickets for insert to
 with check (
   requester_id = (select auth.uid()) and (
     (public.current_app_role() = 'colaborador' and office_id = public.current_app_office()) or
-    public.current_app_role() in ('atendente', 'admin', 'coordenador')
+    public.current_app_role() in ('financeiro', 'admin', 'coordenador')
   )
 );
 drop policy if exists "Staff can triage tickets" on public.tickets;

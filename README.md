@@ -30,7 +30,7 @@ Aplicação web para abrir e acompanhar chamados dos escritórios. A autenticaç
 
    O Supabase disponibiliza as chaves secretas à Edge Function no servidor. Não copie nenhuma chave secreta para o navegador. Consulte a [documentação de publicação pelo Dashboard](https://supabase.com/docs/guides/functions/quickstart-dashboard) e [segurança de Edge Functions](https://supabase.com/docs/guides/functions/auth).
 
-8. Entre no app com a conta administradora. No menu **Equipe**, crie colaboradores, atendentes, pessoas do Financeiro e coordenadores. As novas contas ficam associadas automaticamente ao escritório do administrador. O formulário não permite criar outra conta de administração.
+8. Entre no app com a conta administradora. No menu **Equipe**, crie colaboradores, pessoas do Financeiro e coordenadores. As novas contas ficam associadas automaticamente ao escritório do administrador. O formulário não permite criar outra conta de administração.
 
 9. Para permitir que administração e coordenação excluam contas pela página **Equipe**, execute [`supabase/account-deletion.sql`](supabase/account-deletion.sql) no SQL Editor. Depois, publique a Edge Function `delete-user`: crie uma função com esse nome em **Edge Functions → Deploy a new function → Via Editor**, copie `supabase/functions/delete-user/index.ts`, mantenha a verificação JWT ativa e publique. A lixeira não aparece para a própria conta nem para contas de administração ou coordenação. Chamados, comentários e reservas são mantidos no histórico sem vínculo com a conta excluída.
 
@@ -50,7 +50,7 @@ Entre com uma conta de **administração** e abra **Reservas de salas** para cad
 
 Para aplicar os novos perfis em um projeto Supabase já existente, execute [`supabase/user-permissions.sql`](supabase/user-permissions.sql) depois das migrações de reservas de salas. Publique novamente as Edge Functions `create-user` e `delete-user` e publique `update-user` para permitir alterar perfis na página **Equipe**. Crie a função `update-user` em **Edge Functions → Deploy a new function → Via Editor**, copie `supabase/functions/update-user/index.ts`, mantenha a verificação JWT ativa e publique.
 
-- **Colaborador e atendente:** podem consultar somente os chamados que abriram ou que foram atribuídos a eles; só podem comentar ou alterar chamados atribuídos a eles. Podem consultar todas as reuniões e editar ou cancelar apenas as próprias.
+- **Colaborador e Financeiro:** podem consultar somente os chamados que abriram ou que foram atribuídos a eles; só podem comentar ou alterar chamados atribuídos a eles. Podem consultar todas as reuniões e editar ou cancelar apenas as próprias.
 - **Coordenador:** tem as permissões de administração: pode gerenciar todos os chamados e reuniões, atribuir chamados, administrar salas, escritórios e contas de equipe.
 - **Administração:** mantém as permissões completas do sistema.
 

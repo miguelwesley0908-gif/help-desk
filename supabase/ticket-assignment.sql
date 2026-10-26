@@ -7,13 +7,13 @@ with check (
   requester_id = (select auth.uid())
   and (
     (public.current_app_role() = 'colaborador' and office_id = public.current_app_office())
-    or public.current_app_role() in ('atendente', 'financeiro', 'admin', 'coordenador')
+    or public.current_app_role() in ('financeiro', 'admin', 'coordenador')
   )
   and assignee_id is not null
   and workflow_owner_id = assignee_id
   and exists (
     select 1 from public.profiles p
-    where p.id = assignee_id and p.role in ('atendente', 'coordenador', 'admin')
+    where p.id = assignee_id and p.role in ('financeiro', 'coordenador', 'admin')
   )
 );
 

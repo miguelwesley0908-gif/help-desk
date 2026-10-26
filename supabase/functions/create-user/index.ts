@@ -24,14 +24,14 @@ const handleCreateUser = withSupabase({ auth: "user" }, async (request, context)
   const name = typeof payload.name === "string" ? payload.name.trim() : "";
   const email = typeof payload.email === "string" ? payload.email.trim().toLowerCase() : "";
   const password = typeof payload.password === "string" ? payload.password : "";
-  const role = ["colaborador", "atendente", "financeiro", "coordenador"].includes(String(payload.role)) ? String(payload.role) : "";
+  const role = ["colaborador", "financeiro", "coordenador"].includes(String(payload.role)) ? String(payload.role) : "";
   const adminId = context.userClaims?.id;
 
   if (!adminId) return respond({ error: "Não foi possível identificar sua conta. Entre novamente." }, 401);
   if (!name || name.length > 100) return respond({ error: "Informe um nome com até 100 caracteres." }, 400);
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) return respond({ error: "Informe um e-mail válido." }, 400);
   if (password.length < 8 || password.length > 72) return respond({ error: "A senha inicial deve ter entre 8 e 72 caracteres." }, 400);
-  if (!role) return respond({ error: "Escolha Colaborador, Atendente, Financeiro ou Coordenador." }, 400);
+  if (!role) return respond({ error: "Escolha Colaborador, Financeiro ou Coordenador." }, 400);
 
   const { data: adminProfile, error: profileLookupError } = await context.supabase
     .from("profiles")

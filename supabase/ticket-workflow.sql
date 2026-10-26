@@ -3,7 +3,7 @@
 
 alter table public.profiles drop constraint if exists profiles_role_check;
 alter table public.profiles add constraint profiles_role_check
-  check (role in ('colaborador', 'atendente', 'financeiro', 'coordenador', 'admin'));
+  check (role in ('colaborador', 'financeiro', 'coordenador', 'admin'));
 
 alter table public.tickets add column if not exists workflow_owner_id uuid references public.profiles(id) on delete set null;
 alter table public.tickets add column if not exists financial_assignee_id uuid references public.profiles(id) on delete set null;
@@ -241,9 +241,9 @@ drop policy if exists "Users can open permitted tickets" on public.tickets;
 create policy "Users can open permitted tickets" on public.tickets for insert to authenticated
 with check (requester_id = (select auth.uid()) and (
   (public.current_app_role() = 'colaborador' and office_id = public.current_app_office()) or
-  public.current_app_role() in ('atendente', 'financeiro', 'admin', 'coordenador')
+  public.current_app_role() in ('financeiro', 'admin', 'coordenador')
 ) and assignee_id is not null and workflow_owner_id = assignee_id and exists (
-  select 1 from public.profiles p where p.id = assignee_id and p.role in ('atendente', 'coordenador', 'admin')
+  select 1 from public.profiles p where p.id = assignee_id and p.role in ('financeiro', 'coordenador', 'admin')
 ));
 drop policy if exists "Staff can triage tickets" on public.tickets;
 create policy "Staff can triage tickets" on public.tickets for update to authenticated

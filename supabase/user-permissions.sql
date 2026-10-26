@@ -3,7 +3,7 @@
 
 alter table public.profiles drop constraint if exists profiles_role_check;
 alter table public.profiles add constraint profiles_role_check
-  check (role in ('colaborador', 'atendente', 'financeiro', 'coordenador', 'admin'));
+  check (role in ('colaborador', 'financeiro', 'coordenador', 'admin'));
 
 create or replace function public.prevent_ticket_reassignment_by_assignee()
 returns trigger language plpgsql set search_path = ''
@@ -40,7 +40,7 @@ create policy "Users can open permitted tickets" on public.tickets for insert to
 with check (
   requester_id = (select auth.uid()) and (
     (public.current_app_role() = 'colaborador' and office_id = public.current_app_office()) or
-    public.current_app_role() in ('atendente', 'coordenador', 'admin')
+    public.current_app_role() in ('financeiro', 'coordenador', 'admin')
   )
 );
 drop policy if exists "Staff can triage tickets" on public.tickets;
@@ -71,7 +71,7 @@ drop policy if exists "Users can book active rooms" on public.room_bookings;
 create policy "Users can book active rooms" on public.room_bookings for insert to authenticated
 with check (
   organizer_id = (select auth.uid())
-  and public.current_app_role() in ('colaborador', 'atendente', 'coordenador', 'admin')
+  and public.current_app_role() in ('colaborador', 'financeiro', 'coordenador', 'admin')
   and starts_at > now()
   and exists (select 1 from public.meeting_rooms r where r.id = room_id and r.active)
 );
