@@ -177,15 +177,20 @@ begin
     return new;
   end if;
 
-  if old.assignee_id is distinct from new.assignee_id or old.workflow_step is distinct from new.workflow_step then
+  if old.assignee_id is distinct from new.assignee_id
+     or old.workflow_owner_id is distinct from new.workflow_owner_id
+     or old.workflow_step is distinct from new.workflow_step then
     select coalesce(array_agg(distinct r.recipient), array[]::uuid[]) into recipients
     from unnest(array[new.assignee_id, new.workflow_owner_id]) as r(recipient)
     where r.recipient is not null and r.recipient is distinct from (select auth.uid());
-    message_title := case new.workflow_step
-      when 'orcamento' then 'Ação necessária: orçamento'
-      when 'financeiro' then 'Orçamento aguardando aprovação'
-      when 'execucao' then 'Orçamento aprovado'
-      when 'resolvido' then 'Chamado resolvido'
+    message_title := case
+      when old.workflow_step is not distinct from new.workflow_step
+        and (old.assignee_id is distinct from new.assignee_id or old.workflow_owner_id is distinct from new.workflow_owner_id)
+        then 'Chamado atribuído'
+      when new.workflow_step = 'orcamento' then 'Ação necessária: orçamento'
+      when new.workflow_step = 'financeiro' then 'Orçamento aguardando aprovação'
+      when new.workflow_step = 'execucao' then 'Orçamento aprovado'
+      when new.workflow_step = 'resolvido' then 'Chamado resolvido'
       else 'Chamado atualizado'
     end;
     message_body := 'Chamado ' || new.ticket_no || ' · ' || replace(new.workflow_step, '_', ' ');
