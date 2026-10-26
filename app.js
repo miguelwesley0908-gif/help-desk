@@ -116,7 +116,7 @@ function mapTicket(row) {
 
 async function refreshNotifications() {
   if (!state.user || !db) return;
-  const result = await db.from("notifications").select("id,ticket_id,title,body,created_at,read_at").order("created_at", { ascending: false }).limit(30);
+  const result = await db.from("notifications").select("id,ticket_id,title,body,created_at,read_at").is("read_at", null).order("created_at", { ascending: false }).limit(30);
   if (result.error) return;
   const next = result.data || [];
   if (JSON.stringify(next) !== JSON.stringify(state.notifications || [])) {
@@ -166,7 +166,7 @@ async function loadWorkspace() {
     db.from("ticket_comments").select("id,ticket_id,author_id,body,created_at").order("created_at"),
     db.from("ticket_events").select("id,ticket_id,actor_id,body,created_at").order("created_at"),
     db.from("ticket_attachments").select("id,ticket_id,file_name,file_path,mime_type,file_size,created_at,uploader_id").order("created_at"),
-    db.from("notifications").select("id,ticket_id,title,body,created_at,read_at").order("created_at", { ascending: false }).limit(30),
+    db.from("notifications").select("id,ticket_id,title,body,created_at,read_at").is("read_at", null).order("created_at", { ascending: false }).limit(30),
   ]);
   state.users = checkError(userRows).map(mapUser);
   state.tickets = checkError(ticketRows).map(mapTicket);
@@ -390,7 +390,7 @@ async function startWorkflowTicket(id) {
 async function markNotificationRead(id) {
   try {
     checkError(await db.from("notifications").update({ read_at: now() }).eq("id", id).is("read_at", null));
-    state.notifications = state.notifications.map((item) => item.id === id ? { ...item, read_at: now() } : item);
+    state.notifications = state.notifications.filter((item) => item.id !== id);
     render();
   } catch (error) { showError(error); }
 }
