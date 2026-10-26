@@ -275,7 +275,7 @@ async function login(email, password) {
     return;
   }
 
-  if (state.user) go("/tickets");
+  if (state.user) go("/dashboard");
 }
 
 async function logout() {
@@ -320,6 +320,7 @@ async function deleteTicket(id) {
   if (!canAdminister(currentUser())) return showError(new Error("Somente administração e coordenação podem excluir chamados."));
   const ticket = state.tickets.find((item) => item.id === id);
   if (!ticket) return showError(new Error("Chamado não encontrado."));
+  const returnToDashboard = route.name === "dashboard";
   try {
     if (ticket.attachments.length) {
       const paths = ticket.attachments.map((item) => item.filePath);
@@ -328,7 +329,7 @@ async function deleteTicket(id) {
     checkError(await db.from("tickets").delete().eq("id", id).select("id").single());
     flashSuccess = `${ticket.number} excluído.`;
     await loadWorkspace();
-    go("/tickets", true);
+    go(returnToDashboard ? "/dashboard" : "/tickets", true);
   } catch (error) { showError(error); }
 }
 
@@ -582,6 +583,7 @@ function layout(user, title, actions, content) {
     <div class="shell">
       <aside class="sidebar">
         <div class="brand-mark" style="margin:4px 8px 22px"><div class="logo-tile">H</div>Hekp Gesk</div>
+        <button class="nav-btn ${route.name === "dashboard" ? "active" : ""}" data-go="/dashboard">Painel</button>
         <button class="nav-btn ${route.name === "tickets" && !route.id ? "active" : ""}" data-go="/tickets">Chamados</button>
         <button class="nav-btn ${route.name === "new" ? "active" : ""}" data-go="/new">Abrir chamado</button>
         <button class="nav-btn ${route.name === "reservations" || route.name === "booking" ? "active" : ""}" data-go="/reservations">Reservas de salas</button>
@@ -754,11 +756,25 @@ function renderReservations(user) {
     ${roomAdmin}`);
 }
 
-function ticketTable(tickets) {
+function ticketTable(tickets, user) {
   if (!tickets.length) return `<div class="empty">Nenhum chamado por aqui.</div>`;
-  return `<table><thead><tr><th>Nº</th><th>Título</th><th>Prioridade</th><th>Status</th><th>Atualizado</th></tr></thead><tbody>
-    ${tickets.map((ticket) => `<tr class="clickable" data-go="/tickets/${ticket.id}"><td>${escapeHtml(ticket.number)}</td><td>${escapeHtml(ticket.title)}</td><td>${badgePriority(ticket.priority)}</td><td>${badgeStatus(ticket.status)}</td><td>${formatDate(ticket.updatedAt)}</td></tr>`).join("")}
+  const canDelete = canAdminister(user);
+  return `<table><thead><tr><th>Nº</th><th>Título</th><th>Prioridade</th><th>Status</th><th>Atualizado</th>${canDelete ? "<th>Ações</th>" : ""}</tr></thead><tbody>
+    ${tickets.map((ticket) => `<tr class="clickable" data-go="/tickets/${ticket.id}"><td>${escapeHtml(ticket.number)}</td><td>${escapeHtml(ticket.title)}</td><td>${badgePriority(ticket.priority)}</td><td>${badgeStatus(ticket.status)}</td><td>${formatDate(ticket.updatedAt)}</td>${canDelete ? `<td><button class="btn danger small-btn" type="button" data-delete-ticket="${escapeHtml(ticket.id)}">Excluir</button></td>` : ""}</tr>`).join("")}
     </tbody></table>`;
+}
+
+function renderDashboard(user) {
+  const tickets = visibleTickets(user);
+  const openish = tickets.filter((ticket) => ["aberto", "andamento", "aguardando"].includes(ticket.status));
+  const urgent = tickets.filter((ticket) => ticket.priority === "urgente" && ticket.status !== "encerrado");
+  const mine = tickets.filter((ticket) => (ticket.assigneeId === user.id || ticket.workflowOwnerId === user.id) && !["resolvido", "encerrado"].includes(ticket.status));
+  const recent = tickets.slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 6);
+  const upcomingMeetings = state.bookings.filter((booking) => !booking.canceledAt && new Date(booking.endsAt) > new Date() && (canAdminister(user) || booking.organizerId === user.id)).length;
+  return layout(user, "Painel", `<button class="btn copper" data-go="/new">Novo chamado</button>`, `
+    <section class="kpis"><article class="kpi"><span>Abertos na fila</span><strong>${openish.length}</strong></article><article class="kpi"><span>Urgentes</span><strong>${urgent.length}</strong></article><article class="kpi"><span>Comigo</span><strong>${mine.length}</strong></article><article class="kpi"><span>${canAdminister(user) ? "Reuniões agendadas" : "Minhas próximas reuniões"}</span><strong>${upcomingMeetings}</strong></article></section>
+    ${renderAvailability(user, true)}
+    <section class="panel"><h2>Chamados recentes</h2>${ticketTable(recent, user)}</section>`);
 }
 
 function renderTickets(user) {
@@ -771,7 +787,7 @@ function renderTickets(user) {
   return layout(user, "Chamados", `<button class="btn copper" data-go="/new">Abrir chamado</button>`, `
     <div class="filters"><input id="q" placeholder="Buscar por título, nº ou categoria" value="${escapeHtml(q)}" />
       <select id="status"><option value="">Todos os status</option>${STATUSES.map((value) => `<option value="${value}" ${status === value ? "selected" : ""}>${LABELS[value]}</option>`).join("")}</select>
-    </div><section class="panel">${ticketTable(tickets)}</section>`);
+    </div><section class="panel">${ticketTable(tickets, user)}</section>`);
 }
 
 function renderNew(user) {
@@ -849,7 +865,8 @@ function bind() {
     await markNotificationRead(element.dataset.notificationId);
     if (ticketId) go(`/tickets/${ticketId}`);
   }));
-  document.querySelectorAll("[data-delete-ticket]").forEach((element) => element.addEventListener("click", () => {
+  document.querySelectorAll("[data-delete-ticket]").forEach((element) => element.addEventListener("click", (event) => {
+    event.stopPropagation();
     const ticket = state.tickets.find((item) => item.id === element.dataset.deleteTicket);
     if (!ticket || !canAdminister(currentUser())) return;
     if (window.confirm(`Excluir permanentemente o chamado ${ticket.number} — ${ticket.title}? Essa ação não pode ser desfeita.`)) {
@@ -1002,14 +1019,15 @@ function render() {
     root.innerHTML = renderLogin(); bind();
     return;
   }
-  if (route.name === "booking") root.innerHTML = renderBookingEditor(user);
+  if (route.name === "dashboard") root.innerHTML = renderDashboard(user);
+  else if (route.name === "booking") root.innerHTML = renderBookingEditor(user);
   else if (route.name === "reservations" && route.id === "new") root.innerHTML = renderBookingForm(user);
   else if (route.name === "reservations") root.innerHTML = renderReservations(user);
   else if (route.name === "tickets" && route.id) root.innerHTML = renderTicket(user);
   else if (route.name === "tickets") root.innerHTML = renderTickets(user);
   else if (route.name === "new") root.innerHTML = renderNew(user);
   else if (route.name === "users") root.innerHTML = renderUsers(user);
-  else { go("/tickets"); return; }
+  else { go("/dashboard"); return; }
   bind();
 }
 
