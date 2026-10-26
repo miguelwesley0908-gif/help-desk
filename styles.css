@@ -200,6 +200,15 @@ textarea:focus {
   background: var(--copper-dark);
 }
 
+.btn.danger {
+  background: var(--danger);
+  color: white;
+}
+
+.btn.danger:hover {
+  background: #852d2d;
+}
+
 .btn.full {
   width: 100%;
 }

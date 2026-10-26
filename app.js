@@ -316,6 +316,22 @@ async function updateTicket(id, patch) {
   } catch (error) { showError(error); }
 }
 
+async function deleteTicket(id) {
+  if (!canAdminister(currentUser())) return showError(new Error("Somente administração e coordenação podem excluir chamados."));
+  const ticket = state.tickets.find((item) => item.id === id);
+  if (!ticket) return showError(new Error("Chamado não encontrado."));
+  try {
+    if (ticket.attachments.length) {
+      const paths = ticket.attachments.map((item) => item.filePath);
+      checkError(await db.storage.from("ticket-files").remove(paths));
+    }
+    checkError(await db.from("tickets").delete().eq("id", id).select("id").single());
+    flashSuccess = `${ticket.number} excluído.`;
+    await loadWorkspace();
+    go("/tickets", true);
+  } catch (error) { showError(error); }
+}
+
 async function submitQuoteForApproval(id, amount, file) {
   const ticket = state.tickets.find((item) => item.id === id);
   if (!ticket?.workflowOwnerId || !ticket.financialAssigneeId) return showError(new Error("Atribua Andreza e uma pessoa do Financeiro antes de encaminhar o orçamento."));
@@ -789,7 +805,8 @@ function renderTicket(user) {
   const isOwner = ticket.workflowOwnerId === user.id || canAdminister(user);
   const workflowStepLabel = { triagem: "Aguardando atribuição", orcamento: "Contato com Thomas e orçamento", financeiro: "Aprovação do Financeiro", execucao: "Serviço aprovado, aguardando execução", resolvido: "Fluxo concluído" }[ticket.workflowStep] || ticket.workflowStep;
   const teamAssignees = state.users.filter((item) => ["atendente", "financeiro", "admin", "coordenador"].includes(item.role));
-  return layout(user, ticket.number, `<button class="btn secondary" data-go="/tickets">Voltar à fila</button>`, `
+  const ticketActions = `<button class="btn secondary" data-go="/tickets">Voltar à fila</button>${canAdminister(user) ? ` <button class="btn danger" type="button" data-delete-ticket="${escapeHtml(ticket.id)}">Excluir chamado</button>` : ""}`;
+  return layout(user, ticket.number, ticketActions, `
     <div class="grid-2"><section class="detail"><h2 style="font-family:Fraunces,serif;margin:0 0 8px">${escapeHtml(ticket.title)}</h2><p>${escapeHtml(ticket.description)}</p><h3>Histórico</h3>
       <div class="comments">${renderTimeline(ticket)}</div>${mayEdit ? `<form id="comment-form"><div class="field"><label for="body">Nova atualização</label><textarea id="body" name="body" required placeholder="O que mudou?"></textarea></div><button class="btn" type="submit">Publicar</button></form>` : `<p class="hint">Somente a pessoa responsável pode comentar neste chamado.</p>`}
     </section><aside class="detail"><dl class="meta-list"><div><span>Etapa do fluxo</span><strong>${escapeHtml(workflowStepLabel)}</strong></div><div><span>Status</span>${badgeStatus(ticket.status)}</div><div><span>Prioridade</span>${badgePriority(ticket.priority)}</div><div><span>Categoria</span><span>${escapeHtml(ticket.category)}</span></div>${ticket.location ? `<div><span>Local</span><span>${escapeHtml(ticket.location)}</span></div>` : ""}<div><span>Solicitante</span><span>${escapeHtml(requester?.name || "—")}</span></div><div><span>Responsável atual</span><span>${escapeHtml(assignee?.name || "Fila livre")}</span></div><div><span>Andreza acompanha</span><span>${escapeHtml(userById(ticket.workflowOwnerId)?.name || "Não atribuída")}</span></div><div><span>Financeiro</span><span>${escapeHtml(userById(ticket.financialAssigneeId)?.name || "Não atribuído")}</span></div>${ticket.budgetAmount ? `<div><span>Orçamento</span><span>${Number(ticket.budgetAmount).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</span></div>` : ""}${ticket.financeDecision !== "pendente" ? `<div><span>Decisão financeira</span><span>${ticket.financeDecision === "aprovado" ? "Aprovado" : "Rejeitado"}${ticket.financeNote ? ` — ${escapeHtml(ticket.financeNote)}` : ""}</span></div>` : ""}<div><span>Aberto</span><span>${formatDate(ticket.createdAt)}</span></div></dl>
@@ -831,6 +848,13 @@ function bind() {
     const ticketId = element.dataset.notificationTicket;
     await markNotificationRead(element.dataset.notificationId);
     if (ticketId) go(`/tickets/${ticketId}`);
+  }));
+  document.querySelectorAll("[data-delete-ticket]").forEach((element) => element.addEventListener("click", () => {
+    const ticket = state.tickets.find((item) => item.id === element.dataset.deleteTicket);
+    if (!ticket || !canAdminister(currentUser())) return;
+    if (window.confirm(`Excluir permanentemente o chamado ${ticket.number} — ${ticket.title}? Essa ação não pode ser desfeita.`)) {
+      deleteTicket(ticket.id);
+    }
   }));
   document.querySelectorAll("[data-save-user-role]").forEach((element) => element.addEventListener("click", () => {
     const select = document.querySelector(`[data-user-role="${element.dataset.saveUserRole}"]`);
