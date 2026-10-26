@@ -236,7 +236,7 @@ using (recipient_id = (select auth.uid())) with check (recipient_id = (select au
 drop policy if exists "Users can read permitted tickets" on public.tickets;
 create policy "Users can read permitted tickets" on public.tickets for select to authenticated
 using (requester_id = (select auth.uid()) or assignee_id = (select auth.uid()) or workflow_owner_id = (select auth.uid())
-  or public.current_app_role() in ('admin', 'coordenador'));
+  or (select public.current_app_role()) in ('admin', 'coordenador', 'financeiro'));
 drop policy if exists "Users can open permitted tickets" on public.tickets;
 create policy "Users can open permitted tickets" on public.tickets for insert to authenticated
 with check (requester_id = (select auth.uid()) and (

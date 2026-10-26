@@ -50,7 +50,8 @@ Entre com uma conta de **administração** e abra **Reservas de salas** para cad
 
 Para aplicar os novos perfis em um projeto Supabase já existente, execute [`supabase/user-permissions.sql`](supabase/user-permissions.sql) depois das migrações de reservas de salas. Publique novamente as Edge Functions `create-user` e `delete-user` e publique `update-user` para permitir alterar perfis na página **Equipe**. Crie a função `update-user` em **Edge Functions → Deploy a new function → Via Editor**, copie `supabase/functions/update-user/index.ts`, mantenha a verificação JWT ativa e publique.
 
-- **Colaborador e Financeiro:** podem consultar somente os chamados que abriram ou que foram atribuídos a eles; só podem comentar ou alterar chamados atribuídos a eles. Podem consultar todas as reuniões e editar ou cancelar apenas as próprias.
+- **Colaborador:** consulta os chamados que abriu ou que foram atribuídos a ele; só pode comentar ou alterar chamados atribuídos a ele.
+- **Financeiro:** consulta todos os chamados, comentários, histórico e anexos. Só pode decidir orçamentos atribuídos a ele; não pode trocar responsáveis nem alterar o valor recebido. Também pode consultar todas as reuniões e editar ou cancelar apenas as próprias.
 - **Coordenador:** tem as permissões de administração: pode gerenciar todos os chamados e reuniões, atribuir chamados, administrar salas, escritórios e contas de equipe.
 - **Administração:** mantém as permissões completas do sistema.
 
@@ -61,6 +62,8 @@ As regras também são aplicadas no Supabase, então esconder um botão no naveg
 Depois das migrações acima, execute [`supabase/ticket-workflow.sql`](supabase/ticket-workflow.sql) no SQL Editor. Ela adiciona as etapas do fluxo, o perfil Financeiro, anexos privados, notificações internas, validações e políticas RLS. Para cadastrar pessoas do Financeiro pela tela **Equipe**, publique novamente as Edge Functions `create-user` e `update-user` usando os arquivos atualizados em `supabase/functions/`.
 
 Em seguida, execute [`supabase/ticket-assignment.sql`](supabase/ticket-assignment.sql). Na abertura do chamado, quem solicita escolhe uma pessoa responsável; o escritório fica oculto e é preenchido automaticamente pelo perfil de quem abriu o chamado.
+
+Para permitir que o Financeiro acompanhe todos os chamados até a conclusão em um projeto já configurado, execute [`supabase/finance-track-all-tickets.sql`](supabase/finance-track-all-tickets.sql) no SQL Editor. A regra amplia somente a leitura; as permissões de edição continuam limitadas ao responsável atual e às transições do fluxo.
 
 1. Em **Equipe**, crie o usuário da Andreza com perfil **Atendente** e o usuário do Financeiro com perfil **Financeiro**. Use contas separadas da sua conta de administração.
 2. No chamado, administração ou coordenação escolhe Andreza como responsável contínua, escolhe a pessoa do Financeiro e inicia o contato. Andreza continua acompanhando mesmo quando o Financeiro assume a etapa.
