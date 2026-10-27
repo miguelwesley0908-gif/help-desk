@@ -37,7 +37,7 @@ with check (
     where t.id = ticket_expenses.ticket_id
       and t.financial_assignee_id = (select auth.uid())
       and t.finance_decision = 'aprovado'
-      and t.workflow_step in ('execucao', 'resolvido')
+      and t.workflow_step in ('execucao', 'encerrado')
   )
 );
 
@@ -52,7 +52,7 @@ using (
     where t.id = ticket_expenses.ticket_id
       and t.financial_assignee_id = (select auth.uid())
       and t.finance_decision = 'aprovado'
-      and t.workflow_step in ('execucao', 'resolvido')
+      and t.workflow_step in ('execucao', 'encerrado')
   )
 )
 with check (
@@ -63,6 +63,6 @@ with check (
     where t.id = ticket_expenses.ticket_id
       and t.financial_assignee_id = (select auth.uid())
       and t.finance_decision = 'aprovado'
-      and t.workflow_step in ('execucao', 'resolvido')
+      and t.workflow_step in ('execucao', 'encerrado')
   )
 );
