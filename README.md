@@ -54,6 +54,7 @@ Execute no SQL Editor do mesmo projeto, nesta ordem:
 4. [`supabase/ticket-assignment.sql`](supabase/ticket-assignment.sql) — permite escolher o primeiro responsável ao abrir o chamado.
 5. [`supabase/finance-track-all-tickets.sql`](supabase/finance-track-all-tickets.sql) — permite que o Financeiro leia todos os chamados até a conclusão; não amplia as permissões de edição.
 6. [`supabase/ticket-expenses.sql`](supabase/ticket-expenses.sql) — cria o registro protegido do valor efetivamente pago e as permissões para o Financeiro responsável.
+7. [`supabase/ticket-close-status.sql`](supabase/ticket-close-status.sql) — migra os chamados concluídos para `encerrado`, atualiza as regras do fluxo e remove `resolvido` das constraints.
 
 Em um projeto já em uso, confira quais migrações foram aplicadas antes de executar arquivos novamente. O arquivo de reservas pode ser reaplicado sem apagar reservas existentes.
 
@@ -86,8 +87,8 @@ A aplicação não permite criar outro perfil `admin` pelo formulário. Para dar
 
 O sistema mantém dois conceitos separados:
 
-- `status` é o estado apresentado no chamado: `aberto`, `andamento`, `aguardando`, `resolvido` ou `encerrado`.
-- `workflow_step` representa a etapa do processo: `triagem`, `orcamento`, `financeiro`, `execucao` ou `resolvido`.
+- `status` é o estado apresentado no chamado: `aberto`, `andamento`, `aguardando` ou `encerrado`.
+- `workflow_step` representa a etapa do processo: `triagem`, `orcamento`, `financeiro`, `execucao` ou `encerrado`.
 
 O fluxo padrão é:
 
@@ -95,10 +96,10 @@ O fluxo padrão é:
 2. A pessoa responsável inicia o contato e obtém o orçamento.
 3. O orçamento e o valor são registrados, e o chamado segue para o Financeiro.
 4. O Financeiro aprova ou rejeita. Uma rejeição exige observação; a decisão fica no histórico e o chamado volta à pessoa responsável.
-5. Depois da execução, a pessoa responsável confirma a conclusão. Essa ação conclui a etapa e marca o chamado como resolvido.
+5. Depois da execução, a pessoa responsável confirma a conclusão. Essa ação conclui o fluxo e marca o chamado como encerrado.
 6. O Financeiro responsável registra o valor pago e a data quando o pagamento estiver confirmado. Esse dado alimenta a área **Gastos dos chamados**, que resume os totais por categoria e mostra o valor por chamado.
 
-Administração e coordenação também podem ajustar manualmente o status no chamado, exceto **Resolvido**, que é definido pela ação de conclusão do fluxo. Como status e etapa são campos separados, prefira as ações do fluxo para avançar ou concluir o processo.
+Administração e coordenação também podem ajustar manualmente o status no chamado. A conclusão do serviço define o status e a etapa do fluxo como **Encerrado**. Como status e etapa são campos separados, prefira as ações do fluxo para avançar ou concluir o processo.
 
 ### Relatório de gastos do Financeiro
 
