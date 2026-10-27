@@ -53,6 +53,7 @@ Execute no SQL Editor do mesmo projeto, nesta ordem:
 3. [`supabase/ticket-workflow.sql`](supabase/ticket-workflow.sql) — etapas do fluxo, anexos privados, notificações, validações e políticas do processo de orçamento.
 4. [`supabase/ticket-assignment.sql`](supabase/ticket-assignment.sql) — permite escolher o primeiro responsável ao abrir o chamado.
 5. [`supabase/finance-track-all-tickets.sql`](supabase/finance-track-all-tickets.sql) — permite que o Financeiro leia todos os chamados até a conclusão; não amplia as permissões de edição.
+6. [`supabase/ticket-expenses.sql`](supabase/ticket-expenses.sql) — cria o registro protegido do valor efetivamente pago e as permissões para o Financeiro responsável.
 
 Em um projeto já em uso, confira quais migrações foram aplicadas antes de executar arquivos novamente. O arquivo de reservas pode ser reaplicado sem apagar reservas existentes.
 
@@ -75,7 +76,7 @@ As funções verificam o perfil da pessoa que fez a chamada. O Supabase mantém 
 Os valores de perfil no banco são `colaborador`, `financeiro`, `coordenador` e `admin`. A tela mostra `admin` como **Administração**. Não existe um perfil separado chamado “Atendente”.
 
 - **Colaborador:** abre chamados para seu escritório e consulta os chamados que abriu ou que foram atribuídos a ele.
-- **Financeiro:** consulta todos os chamados, comentários, histórico e anexos. Pode aprovar ou rejeitar apenas os orçamentos atribuídos a ele na etapa financeira; não pode mudar responsáveis nem o valor enviado.
+- **Financeiro:** consulta todos os chamados, comentários, histórico e anexos. Pode aprovar ou rejeitar apenas os orçamentos atribuídos a ele na etapa financeira; não pode mudar responsáveis nem o valor enviado. Depois da aprovação, registra ou corrige o gasto realizado do chamado que está atribuído a ele.
 - **Coordenador:** pode administrar chamados e reservas, alterar responsáveis e perfis da equipe, além de gerenciar salas.
 - **Administração:** tem as permissões completas do sistema.
 
@@ -95,8 +96,13 @@ O fluxo padrão é:
 3. O orçamento e o valor são registrados, e o chamado segue para o Financeiro.
 4. O Financeiro aprova ou rejeita. Uma rejeição exige observação; a decisão fica no histórico e o chamado volta à pessoa responsável.
 5. Depois da execução, a pessoa responsável confirma a conclusão. Essa ação conclui a etapa e marca o chamado como resolvido.
+6. O Financeiro responsável registra o valor pago e a data quando o pagamento estiver confirmado. Esse dado alimenta a área **Gastos dos chamados**, que resume os totais por categoria e mostra o valor por chamado.
 
 Administração e coordenação também podem ajustar manualmente o status no chamado, exceto **Resolvido**, que é definido pela ação de conclusão do fluxo. Como status e etapa são campos separados, prefira as ações do fluxo para avançar ou concluir o processo.
+
+### Relatório de gastos do Financeiro
+
+O menu **Gastos dos chamados** é exclusivo do perfil Financeiro. O relatório soma valores efetivamente pagos informados pelo Financeiro; o orçamento aprovado aparece em coluna separada para comparação e nunca é tratado como pagamento. Chamados aprovados sem gasto registrado ficam como **Não informado** e entram na contagem de pendentes. Cada Financeiro pode registrar ou atualizar o valor apenas para os chamados atribuídos a ele, após a aprovação e durante a execução ou depois da conclusão. RLS protege a tabela de gastos no banco, além das verificações da interface.
 
 As notificações são internas ao app. O painel busca as não lidas e atualiza a lista periodicamente enquanto a sessão está aberta. Ao abrir uma notificação, o sistema salva `read_at` para aquela pessoa; a leitura não apaga o histórico do banco nem oculta a notificação para outros destinatários. O sistema não envia e-mail nem integra WhatsApp.
 
