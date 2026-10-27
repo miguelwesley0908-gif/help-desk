@@ -1016,7 +1016,7 @@ function bind() {
   const manageForm = document.getElementById("manage-form");
   manageForm?.addEventListener("submit", (event) => {
     event.preventDefault(); const data = new FormData(manageForm);
-    const patch = { status: String(data.get("status")), priority: String(data.get("priority")), workflowOwnerId: String(data.get("workflowOwnerId")), financialAssigneeId: String(data.get("financialAssigneeId")) };
+    const patch = { priority: String(data.get("priority")), workflowOwnerId: String(data.get("workflowOwnerId")), financialAssigneeId: String(data.get("financialAssigneeId")) };
     if (data.has("assigneeId")) patch.assigneeId = String(data.get("assigneeId")) || null;
     updateTicket(route.id, patch);
   });
