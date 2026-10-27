@@ -127,7 +127,7 @@ function mapTicket(row) {
     location: row.location || "",
     requesterId: row.requester_id, assigneeId: row.assignee_id, workflowOwnerId: row.workflow_owner_id,
     financialAssigneeId: row.financial_assignee_id, workflowStep: row.workflow_step || "triagem",
-    budgetAmount: row.budget_amount, financeDecision: row.finance_decision || "pendente",
+    budgetAmount: row.budget_amount, approvedQuoteAttachmentId: row.approved_quote_attachment_id || null, financeDecision: row.finance_decision || "pendente",
     financeNote: row.finance_note || "", createdAt: row.created_at,
     updatedAt: row.updated_at, comments: [], events: [],
     attachments: [],
@@ -185,10 +185,10 @@ async function loadWorkspace() {
   const notificationLoadRequest = ++notificationRequestGeneration;
   const [userRows, ticketRows, commentRows, eventRows, attachmentRows, notificationRows] = await Promise.all([
     db.from("profiles").select("id,name,role,office_id").order("name"),
-    db.from("tickets").select("id,ticket_no,title,description,category,priority,status,office_id,location,requester_id,assignee_id,workflow_owner_id,financial_assignee_id,workflow_step,budget_amount,finance_decision,finance_note,created_at,updated_at").order("updated_at", { ascending: false }),
+    db.from("tickets").select("id,ticket_no,title,description,category,priority,status,office_id,location,requester_id,assignee_id,workflow_owner_id,financial_assignee_id,workflow_step,budget_amount,approved_quote_attachment_id,finance_decision,finance_note,created_at,updated_at").order("updated_at", { ascending: false }),
     db.from("ticket_comments").select("id,ticket_id,author_id,body,created_at").order("created_at"),
     db.from("ticket_events").select("id,ticket_id,actor_id,body,created_at").order("created_at"),
-    db.from("ticket_attachments").select("id,ticket_id,file_name,file_path,mime_type,file_size,created_at,uploader_id").order("created_at"),
+    db.from("ticket_attachments").select("id,ticket_id,file_name,file_path,mime_type,file_size,quote_amount,created_at,uploader_id").order("created_at"),
     db.from("notifications").select("id,ticket_id,title,body,created_at,read_at").is("read_at", null).order("created_at", { ascending: false }).limit(30),
   ]);
   state.users = checkError(userRows).map(mapUser);
@@ -203,7 +203,7 @@ async function loadWorkspace() {
   }
   for (const row of checkError(attachmentRows)) {
     const ticket = state.tickets.find((item) => item.id === row.ticket_id);
-    if (ticket) ticket.attachments.push({ id: row.id, fileName: row.file_name, filePath: row.file_path, mimeType: row.mime_type, fileSize: row.file_size, createdAt: row.created_at, uploaderId: row.uploader_id });
+    if (ticket) ticket.attachments.push({ id: row.id, fileName: row.file_name, filePath: row.file_path, mimeType: row.mime_type, fileSize: row.file_size, quoteAmount: row.quote_amount == null ? null : Number(row.quote_amount), createdAt: row.created_at, uploaderId: row.uploader_id });
   }
   const loadedNotifications = checkError(notificationRows).filter((item) => !item.read_at);
   if (notificationLoadRequest === notificationRequestGeneration) state.notifications = loadedNotifications;
@@ -363,38 +363,77 @@ async function deleteTicket(id) {
   } catch (error) { showError(error); }
 }
 
-async function submitQuoteForApproval(id, amount, file) {
+async function addQuoteToTicket(id, amount, file) {
+  const user = currentUser();
   const ticket = state.tickets.find((item) => item.id === id);
-  if (!ticket?.workflowOwnerId || !ticket.financialAssigneeId) return showError(new Error("Atribua Andreza e uma pessoa do Financeiro antes de encaminhar o orçamento."));
+  const isOwner = ticket && (ticket.workflowOwnerId === user?.id || canAdminister(user));
+  if (!ticket || ticket.workflowStep !== "orcamento" || !isOwner) return showError(new Error("Somente a pessoa responsável pode adicionar orçamentos nesta etapa."));
   const parsedAmount = Number(String(amount).replace(",", "."));
   if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) return showError(new Error("Informe um valor de orçamento válido."));
-  if (!file) return showError(new Error("Anexe o orçamento recebido do fornecedor ou prestador."));
+  if (!file) return showError(new Error("Anexe o PDF ou a imagem do orçamento."));
   if (file.size > 10 * 1024 * 1024) return showError(new Error("O arquivo deve ter no máximo 10 MB."));
   flashError = "";
+  let uploadedPath = null;
   try {
-    const filePath = `${id}/${crypto.randomUUID()}-${file.name.replace(/[^\p{L}\p{N}._-]/gu, "_")}`;
+    const filePath = id + "/" + crypto.randomUUID() + "-" + file.name.replace(/[^\p{L}\p{N}._-]/gu, "_");
     checkError(await db.storage.from("ticket-files").upload(filePath, file, { contentType: file.type || "application/octet-stream", upsert: false }));
-    checkError(await db.from("ticket_attachments").insert({ ticket_id: id, uploader_id: currentUser().id, file_name: file.name, file_path: filePath, mime_type: file.type || "application/octet-stream", file_size: file.size }));
-    checkError(await db.from("tickets").update({ workflow_step: "financeiro", status: "aguardando", budget_amount: parsedAmount, finance_decision: "pendente", finance_note: "", assignee_id: ticket.financialAssigneeId }).eq("id", id).select("id").single());
-    flashSuccess = "Orçamento encaminhado ao Financeiro.";
+    uploadedPath = filePath;
+    checkError(await db.from("ticket_attachments").insert({
+      ticket_id: id, uploader_id: user.id, file_name: file.name, file_path: filePath,
+      mime_type: file.type || "application/octet-stream", file_size: file.size, quote_amount: parsedAmount,
+    }).select("id").single());
+    uploadedPath = null;
+    flashSuccess = "Orçamento de " + formatMoney(parsedAmount) + " adicionado.";
+    await loadWorkspace();
+  } catch (error) {
+    if (uploadedPath) await db.storage.from("ticket-files").remove([uploadedPath]);
+    showError(error);
+  }
+}
+
+async function submitQuotesForApproval(id) {
+  const ticket = state.tickets.find((item) => item.id === id);
+  const user = currentUser();
+  const isOwner = ticket && (ticket.workflowOwnerId === user?.id || canAdminister(user));
+  if (!ticket || ticket.workflowStep !== "orcamento" || !isOwner) return showError(new Error("Somente a pessoa responsável pode encaminhar os orçamentos."));
+  const quotes = ticket.attachments.filter((item) => item.quoteAmount != null);
+  if (!quotes.length) return showError(new Error("Adicione pelo menos um orçamento antes de encaminhar."));
+  if (!ticket.financialAssigneeId) return showError(new Error("Atribua uma pessoa do Financeiro antes de encaminhar."));
+  try {
+    checkError(await db.from("tickets").update({
+      workflow_step: "financeiro", status: "aguardando", budget_amount: null,
+      approved_quote_attachment_id: null, finance_decision: "pendente", finance_note: "",
+      assignee_id: ticket.financialAssigneeId,
+    }).eq("id", id).select("id").single());
+    flashSuccess = quotes.length + " orçamento(s) encaminhado(s) ao Financeiro.";
     await loadWorkspace();
   } catch (error) { showError(error); }
 }
 
-async function decideQuote(id, approved, note) {
+async function decideQuote(id, approved, note, selectedQuoteAttachmentId = "") {
+  const user = currentUser();
   const ticket = state.tickets.find((item) => item.id === id);
-  if (!ticket) return;
-  const decision = approved ? "aprovado" : "rejeitado";
-  if (!approved && !note.trim()) return showError(new Error("Informe o motivo da rejeição para Andreza."));
+  if (!ticket || user?.role !== "financeiro" || ticket.financialAssigneeId !== user.id || ticket.assigneeId !== user.id || ticket.workflowStep !== "financeiro") {
+    return showError(new Error("Somente o Financeiro responsável pode decidir estes orçamentos."));
+  }
+  const selectedQuote = approved
+    ? ticket.attachments.find((item) => item.id === selectedQuoteAttachmentId && item.quoteAmount != null)
+    : null;
+  if (approved && !selectedQuote) return showError(new Error("Selecione o orçamento que será aprovado."));
+  if (!approved && !note.trim()) return showError(new Error("Informe o motivo da rejeição para a pessoa responsável."));
   try {
     checkError(await db.from("tickets").update({
       workflow_step: approved ? "execucao" : "orcamento",
       status: approved ? "andamento" : "aguardando",
-      finance_decision: decision,
+      finance_decision: approved ? "aprovado" : "rejeitado",
       finance_note: note.trim(),
+      budget_amount: approved ? selectedQuote.quoteAmount : null,
+      approved_quote_attachment_id: approved ? selectedQuote.id : null,
       assignee_id: ticket.workflowOwnerId,
     }).eq("id", id).select("id").single());
-    flashSuccess = approved ? "Orçamento aprovado e devolvido à Andreza para combinar o serviço." : "Orçamento rejeitado e devolvido à Andreza.";
+    flashSuccess = approved
+      ? "Orçamento de " + formatMoney(selectedQuote.quoteAmount) + " aprovado e devolvido à pessoa responsável."
+      : "Orçamentos rejeitados e devolvidos à pessoa responsável.";
     await loadWorkspace();
   } catch (error) { showError(error); }
 }
@@ -900,6 +939,32 @@ function renderTimeline(ticket) {
   }).join("");
 }
 
+function ticketQuotes(ticket) {
+  return ticket.attachments.filter((item) => item.quoteAmount != null);
+}
+
+function renderQuoteList(ticket, selectable = false) {
+  const quotes = ticketQuotes(ticket);
+  if (!quotes.length) return '<div class="empty">Nenhum orçamento adicionado ainda.</div>';
+  return '<div class="quote-list">' + quotes.map((item) => {
+    const approved = ticket.approvedQuoteAttachmentId === item.id;
+    const details = '<span><strong>' + formatMoney(item.quoteAmount) + (approved ? ' <span class="badge st-encerrado">Aprovado</span>' : '') + '</strong><small>' + escapeHtml(item.fileName) + ' · ' + formatDate(item.createdAt) + '</small></span>';
+    const choice = selectable
+      ? '<label class="quote-choice"><input type="radio" name="quoteAttachmentId" value="' + escapeHtml(item.id) + '" required />' + details + '</label>'
+      : '<div class="quote-choice">' + details + '</div>';
+    return '<div class="quote-option">' + choice + '<button class="btn secondary small-btn" type="button" data-attachment-path="' + escapeHtml(item.filePath) + '">Abrir arquivo</button></div>';
+  }).join("") + '</div>';
+}
+
+function renderQuoteManager(ticket) {
+  const quotes = ticketQuotes(ticket);
+  const quoteCount = quotes.length;
+  return '<section class="workflow-form"><h3>Orçamentos</h3><p class="hint">Adicione as opções recebidas. Cada uma precisa do próprio valor e arquivo. É necessário pelo menos um para encaminhar.</p>'
+    + renderQuoteList(ticket)
+    + '<form id="quote-add-form" class="quote-add-form"><div class="field"><label for="quote-amount">Valor deste orçamento (R$)</label><input id="quote-amount" name="amount" type="number" min="0.01" step="0.01" required /></div><div class="field"><label for="quote-file">PDF ou print do orçamento</label><input id="quote-file" name="quote" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,application/pdf,image/jpeg,image/png,image/webp" required /></div><button class="btn secondary full" type="submit">Adicionar orçamento</button></form>'
+    + '<button class="btn copper full" type="button" data-submit-quotes="' + escapeHtml(ticket.id) + '" ' + (quoteCount ? '' : 'disabled') + '>Encaminhar ' + (quoteCount ? quoteCount + (quoteCount === 1 ? ' orçamento' : ' orçamentos') : 'orçamentos') + ' ao Financeiro</button></section>';
+}
+
 function renderTicket(user) {
   const ticket = state.tickets.find((item) => item.id === route.id);
   if (!ticket) return layout(user, "Chamado", "", `<div class="empty">Chamado não encontrado.</div>`);
@@ -909,18 +974,20 @@ function renderTicket(user) {
   const isOwner = ticket.workflowOwnerId === user.id || canAdminister(user);
   const workflowStepLabel = { triagem: "Aguardando atribuição", orcamento: "Contato com fornecedor e orçamento", financeiro: "Aprovação do Financeiro", execucao: "Serviço aprovado, aguardando execução", encerrado: "Encerrado" }[ticket.workflowStep] || ticket.workflowStep;
   const teamAssignees = state.users.filter((item) => ["financeiro", "admin", "coordenador"].includes(item.role));
+  const otherAttachments = ticket.attachments.filter((item) => item.quoteAmount == null);
   const ticketActions = `<button class="btn secondary" data-go="/tickets">Voltar à fila</button>${canAdminister(user) ? ` <button class="btn danger" type="button" data-delete-ticket="${escapeHtml(ticket.id)}">Excluir chamado</button>` : ""}`;
   return layout(user, ticket.number, ticketActions, `
     <div class="grid-2"><section class="detail"><h2 style="font-family:Fraunces,serif;margin:0 0 8px">${escapeHtml(ticket.title)}</h2><p>${escapeHtml(ticket.description)}</p><h3>Histórico</h3>
       <div class="comments">${renderTimeline(ticket)}</div>${mayEdit ? `<form id="comment-form"><div class="field"><label for="body">Nova atualização</label><textarea id="body" name="body" required placeholder="O que mudou?"></textarea></div><button class="btn" type="submit">Publicar</button></form>` : `<p class="hint">Somente a pessoa responsável pode comentar neste chamado.</p>`}
-    </section><aside class="detail"><dl class="meta-list"><div><span>Etapa do fluxo</span><strong>${escapeHtml(workflowStepLabel)}</strong></div><div><span>Status</span>${canAdminister(user) ? `<form id="status-form" style="display:flex;gap:8px;align-items:center"><select name="status" required aria-label="Alterar status do chamado">${STATUSES.map((value) => `<option value="${value}" ${ticket.status === value ? "selected" : ""}>${LABELS[value]}</option>`).join("")}</select><button class="btn secondary small-btn" type="submit">Salvar status</button></form>` : badgeStatus(ticket.status)}</div><div><span>Prioridade</span>${badgePriority(ticket.priority)}</div><div><span>Categoria</span><span>${escapeHtml(ticket.category)}</span></div>${ticket.location ? `<div><span>Local</span><span>${escapeHtml(ticket.location)}</span></div>` : ""}<div><span>Solicitante</span><span>${escapeHtml(requester?.name || "—")}</span></div><div><span>Responsável atual</span><span>${escapeHtml(assignee?.name || "Fila livre")}</span></div><div><span>Responsável pelo fluxo</span><span>${escapeHtml(userById(ticket.workflowOwnerId)?.name || "Não atribuída")}</span></div><div><span>Financeiro</span><span>${escapeHtml(userById(ticket.financialAssigneeId)?.name || "Não atribuído")}</span></div>${ticket.budgetAmount ? `<div><span>Orçamento</span><span>${Number(ticket.budgetAmount).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</span></div>` : ""}${ticket.financeDecision !== "pendente" ? `<div><span>Decisão financeira</span><span>${ticket.financeDecision === "aprovado" ? "Aprovado" : "Rejeitado"}${ticket.financeNote ? ` — ${escapeHtml(ticket.financeNote)}` : ""}</span></div>` : ""}<div><span>Aberto</span><span>${formatDate(ticket.createdAt)}</span></div></dl>
+    </section><aside class="detail"><dl class="meta-list"><div><span>Etapa do fluxo</span><strong>${escapeHtml(workflowStepLabel)}</strong></div><div><span>Status</span>${canAdminister(user) ? `<form id="status-form" style="display:flex;gap:8px;align-items:center"><select name="status" required aria-label="Alterar status do chamado">${STATUSES.map((value) => `<option value="${value}" ${ticket.status === value ? "selected" : ""}>${LABELS[value]}</option>`).join("")}</select><button class="btn secondary small-btn" type="submit">Salvar status</button></form>` : badgeStatus(ticket.status)}</div><div><span>Prioridade</span>${badgePriority(ticket.priority)}</div><div><span>Categoria</span><span>${escapeHtml(ticket.category)}</span></div>${ticket.location ? `<div><span>Local</span><span>${escapeHtml(ticket.location)}</span></div>` : ""}<div><span>Solicitante</span><span>${escapeHtml(requester?.name || "—")}</span></div><div><span>Responsável atual</span><span>${escapeHtml(assignee?.name || "Fila livre")}</span></div><div><span>Responsável pelo fluxo</span><span>${escapeHtml(userById(ticket.workflowOwnerId)?.name || "Não atribuída")}</span></div><div><span>Financeiro</span><span>${escapeHtml(userById(ticket.financialAssigneeId)?.name || "Não atribuído")}</span></div>${ticket.budgetAmount ? `<div><span>Orçamento aprovado</span><span>${Number(ticket.budgetAmount).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</span></div>` : ""}${ticket.financeDecision !== "pendente" ? `<div><span>Decisão financeira</span><span>${ticket.financeDecision === "aprovado" ? "Aprovado" : "Rejeitado"}${ticket.financeNote ? ` — ${escapeHtml(ticket.financeNote)}` : ""}</span></div>` : ""}<div><span>Aberto</span><span>${formatDate(ticket.createdAt)}</span></div></dl>
       ${canAdminister(user) ? `<form id="manage-form" style="margin-top:18px"><h3>Responsáveis do fluxo</h3><div class="field"><label>Responsável pelo fluxo</label><select name="workflowOwnerId"><option value="">Selecione uma pessoa</option>${teamAssignees.map((item) => `<option value="${item.id}" ${ticket.workflowOwnerId === item.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></div><div class="field"><label>Responsável do Financeiro</label><select name="financialAssigneeId"><option value="">Selecione Financeiro</option>${state.users.filter((item) => item.role === "financeiro").map((item) => `<option value="${item.id}" ${ticket.financialAssigneeId === item.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></div><div class="field"><label>Responsável atual</label><select name="assigneeId"><option value="">Fila livre</option>${teamAssignees.map((item) => `<option value="${item.id}" ${ticket.assigneeId === item.id ? "selected" : ""}>${escapeHtml(item.name)} · ${LABELS[item.role]}</option>`).join("")}</select></div><div class="field"><label>Prioridade</label><select name="priority">${PRIORITIES.map((value) => `<option value="${value}" ${ticket.priority === value ? "selected" : ""}>${LABELS[value]}</option>`).join("")}</select></div><button class="btn copper full" type="submit">Salvar alterações</button></form>` : ""}
       ${ticket.workflowStep === "triagem" && isOwner ? `<button class="btn copper full workflow-action" type="button" data-workflow-start="${ticket.id}">Iniciar contato e pedir orçamento</button>` : ""}
-      ${ticket.workflowStep === "orcamento" && isOwner ? `<form id="quote-form" class="workflow-form"><h3>Enviar orçamento ao Financeiro</h3><p class="hint">Registre o valor e anexe o orçamento recebido do fornecedor ou prestador.</p><div class="field"><label>Valor (R$)</label><input name="amount" type="number" min="0.01" step="0.01" required /></div><div class="field"><label>Arquivo do orçamento</label><input name="quote" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,application/pdf,image/jpeg,image/png,image/webp" required /></div><button class="btn copper full" type="submit">Encaminhar para aprovação</button></form>` : ""}
-      ${ticket.workflowStep === "financeiro" && user.role === "financeiro" && ticket.assigneeId === user.id ? `<form id="finance-form" class="workflow-form"><h3>Decisão do Financeiro</h3><div class="field"><label>Observação (obrigatória para rejeitar)</label><textarea name="note" placeholder="Motivo da decisão"></textarea></div><div class="filters"><button class="btn copper" type="button" data-finance-decision="approve">Aprovar</button><button class="btn secondary" type="button" data-finance-decision="reject">Rejeitar</button></div></form>` : ""}
+      ${ticket.workflowStep === "orcamento" && isOwner ? renderQuoteManager(ticket) : ""}
+      ${ticket.workflowStep === "financeiro" && user.role === "financeiro" && ticket.assigneeId === user.id ? `<form id="finance-form" class="workflow-form"><h3>Comparar orçamentos</h3><p class="hint">Selecione a opção que deseja aprovar. Para rejeitar, informe o motivo.</p>${renderQuoteList(ticket, true)}<div class="field"><label>Observação (obrigatória para rejeitar)</label><textarea name="note" placeholder="Motivo da decisão"></textarea></div><div class="filters"><button class="btn copper" type="button" data-finance-decision="approve">Aprovar orçamento selecionado</button><button class="btn secondary" type="button" data-finance-decision="reject">Rejeitar orçamentos</button></div></form>` : ""}
       ${user.role === "financeiro" && ticket.financialAssigneeId === user.id && ticket.financeDecision === "aprovado" && ["execucao", "encerrado"].includes(ticket.workflowStep) ? (() => { const expense = financeExpenses.find((item) => item.ticketId === ticket.id); return `<form id="ticket-expense-form" class="workflow-form"><h3>Gasto realizado</h3><p class="hint">Registre o valor depois que o pagamento for confirmado.</p><div class="field"><label for="expense-amount">Valor pago (R$)</label><input id="expense-amount" name="amount" type="number" min="0" step="0.01" required value="${expense ? expense.amount.toFixed(2) : ""}" /></div><div class="field"><label for="expense-paid-at">Data do pagamento</label><input id="expense-paid-at" name="paidAt" type="date" max="${dateInBookingZone()}" required value="${expense?.paidAt || dateInBookingZone()}" /></div><button class="btn copper full" type="submit">${expense ? "Atualizar gasto" : "Registrar gasto"}</button></form>`; })() : ""}
       ${ticket.workflowStep === "execucao" && isOwner ? `<section class="workflow-form"><h3>Conclusão da execução</h3><p class="hint">Quando o serviço for concluído, confirme para encerrar o chamado.</p><button class="btn copper full" type="button" data-workflow-complete="${ticket.id}">Confirmar conclusão e encerrar</button></section>` : ""}
-      ${ticket.attachments.length ? `<section class="workflow-form"><h3>Orçamentos e arquivos</h3>${ticket.attachments.map((item) => `<button class="attachment-link" type="button" data-attachment-path="${escapeHtml(item.filePath)}">${escapeHtml(item.fileName)} · ${formatDate(item.createdAt)}</button>`).join("")}</section>` : ""}
+      ${ticket.workflowStep !== "orcamento" && !(ticket.workflowStep === "financeiro" && user.role === "financeiro" && ticket.assigneeId === user.id) && ticketQuotes(ticket).length ? `<section class="workflow-form"><h3>Orçamentos</h3>${renderQuoteList(ticket)}</section>` : ""}
+      ${otherAttachments.length ? `<section class="workflow-form"><h3>Arquivos</h3>${otherAttachments.map((item) => `<button class="attachment-link" type="button" data-attachment-path="${escapeHtml(item.filePath)}">${escapeHtml(item.fileName)} · ${formatDate(item.createdAt)}</button>`).join("")}</section>` : ""}
     </aside></div>`);
 }
 
@@ -1034,7 +1101,8 @@ function bind() {
   document.querySelectorAll("[data-attachment-path]").forEach((element) => element.addEventListener("click", () => openAttachment(element.dataset.attachmentPath)));
   document.querySelectorAll("[data-finance-decision]").forEach((element) => element.addEventListener("click", () => {
     const note = document.querySelector('#finance-form [name="note"]')?.value || "";
-    decideQuote(route.id, element.dataset.financeDecision === "approve", note);
+    const selectedQuote = document.querySelector('#finance-form [name="quoteAttachmentId"]:checked')?.value || "";
+    decideQuote(route.id, element.dataset.financeDecision === "approve", note, selectedQuote);
   }));
   document.querySelectorAll("[data-room-toggle]").forEach((element) => element.addEventListener("click", () => {
     setRoomActive(element.dataset.roomToggle, element.dataset.roomActive === "true");
@@ -1114,11 +1182,12 @@ function bind() {
     event.preventDefault(); const data = new FormData(expenseForm);
     saveTicketExpense(route.id, String(data.get("amount")), String(data.get("paidAt")));
   });
-  const quoteForm = document.getElementById("quote-form");
-  quoteForm?.addEventListener("submit", (event) => {
-    event.preventDefault(); const data = new FormData(quoteForm);
-    submitQuoteForApproval(route.id, String(data.get("amount")), data.get("quote"));
+  const quoteAddForm = document.getElementById("quote-add-form");
+  quoteAddForm?.addEventListener("submit", (event) => {
+    event.preventDefault(); const data = new FormData(quoteAddForm);
+    addQuoteToTicket(route.id, String(data.get("amount")), data.get("quote"));
   });
+  document.querySelectorAll("[data-submit-quotes]").forEach((element) => element.addEventListener("click", () => submitQuotesForApproval(element.dataset.submitQuotes)));
   const ticketSearch = document.getElementById("q");
   ticketSearch?.addEventListener("input", (event) => {
     ticketFilters.query = event.target.value;
