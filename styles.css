@@ -807,3 +807,28 @@ tr.clickable:hover {
     grid-column: auto;
   }
 }
+
+
+.ticket-filters {
+  display: grid;
+  grid-template-columns: minmax(220px, 2fr) repeat(3, minmax(150px, 1fr));
+  align-items: center;
+}
+
+.ticket-filters input,
+.ticket-filters select {
+  width: 100%;
+  min-width: 0;
+}
+
+@media (max-width: 980px) {
+  .ticket-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .ticket-filters {
+    grid-template-columns: 1fr;
+  }
+}
