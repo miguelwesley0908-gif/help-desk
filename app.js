@@ -809,15 +809,26 @@ function renderTickets(user) {
 
 function renderNew(user) {
   const assignees = state.users.filter((item) => ["financeiro", "coordenador", "admin"].includes(item.role));
-  return layout(user, "Abrir chamado", "", `<form class="card" id="ticket-form" style="width:min(640px,100%)">
-    <p class="hint">TI para cabos, periféricos e falhas de tecnologia; Infraestrutura para a estrutura física, como cadeiras, mesas e ar-condicionado; Financeiro para assuntos do departamento.</p>
-    <div class="field"><label for="title">Título</label><input id="title" name="title" required maxlength="90" placeholder="Ex.: Impressora da recepção sem papel" /></div>
-    <div class="field"><label for="description">Descrição</label><textarea id="description" name="description" required placeholder="O que aconteceu, desde quando e quem foi afetado."></textarea></div>
-    <div class="field"><label for="location">Local (opcional)</label><input id="location" name="location" maxlength="120" placeholder="Ex.: sala de reuniões ou mesa 12" /></div>
-    <div class="filters"><div class="field"><label>Categoria</label><select name="category">${CATEGORIES.map((value) => `<option value="${value}">${CATEGORY_LABELS[value]}</option>`).join("")}</select></div>
-      <div class="field"><label>Prioridade</label><select name="priority">${PRIORITIES.map((value) => `<option value="${value}">${LABELS[value]}</option>`).join("")}</select></div>
-      <div class="field"><label for="ticket-assignee">Atribuir a</label><select id="ticket-assignee" name="assigneeId" required><option value="">Selecione uma pessoa</option>${assignees.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)} · ${escapeHtml(LABELS[item.role] || item.role)}</option>`).join("")}</select></div></div>
-    <button class="btn copper" type="submit">Registrar chamado</button></form>`);
+  return layout(user, "Abrir chamado", "", `<div class="new-ticket-layout">
+    <form class="card new-ticket-form" id="ticket-form">
+      <div class="field"><label for="title">Título</label><input id="title" name="title" required maxlength="90" placeholder="Ex.: Impressora da recepção sem papel" /></div>
+      <div class="field"><label for="description">Descrição</label><textarea id="description" name="description" required placeholder="O que aconteceu, desde quando e quem foi afetado."></textarea></div>
+      <div class="field"><label for="location">Local (opcional)</label><input id="location" name="location" maxlength="120" placeholder="Ex.: sala de reuniões ou mesa 12" /></div>
+      <div class="filters"><div class="field"><label>Categoria</label><select name="category">${CATEGORIES.map((value) => `<option value="${value}">${CATEGORY_LABELS[value]}</option>`).join("")}</select></div>
+        <div class="field"><label>Prioridade</label><select name="priority">${PRIORITIES.map((value) => `<option value="${value}">${LABELS[value]}</option>`).join("")}</select></div>
+        <div class="field"><label for="ticket-assignee">Atribuir a</label><select id="ticket-assignee" name="assigneeId" required><option value="">Selecione uma pessoa</option>${assignees.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)} · ${escapeHtml(LABELS[item.role] || item.role)}</option>`).join("")}</select></div></div>
+      <button class="btn copper" type="submit">Registrar chamado</button>
+    </form>
+    <aside class="new-ticket-guide">
+      <h2>Como escolher a categoria</h2>
+      <div class="category-guide">
+        <p><strong>TI</strong><span>Computadores, internet e periféricos.</span></p>
+        <p><strong>Infraestrutura</strong><span>Salas, móveis e ar-condicionado.</span></p>
+        <p><strong>Financeiro</strong><span>Assuntos do departamento financeiro.</span></p>
+      </div>
+      <p class="hint">Na descrição, conte o que aconteceu e quando começou.</p>
+    </aside>
+  </div>`);
 }
 
 function renderTimeline(ticket) {
