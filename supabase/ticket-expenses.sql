@@ -12,6 +12,8 @@ create table public.ticket_expenses (
   updated_at timestamptz not null default now()
 );
 
+create index ticket_expenses_recorded_by_idx on public.ticket_expenses (recorded_by);
+
 alter table public.ticket_expenses enable row level security;
 revoke all on public.ticket_expenses from public, anon, authenticated;
 grant select on public.ticket_expenses to authenticated;
