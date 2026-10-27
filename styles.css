@@ -546,9 +546,25 @@ tr.clickable:hover {
   color: var(--muted);
 }
 
+.team-actions-heading {
+  min-width: 152px;
+}
+
 .user-actions {
-  width: 56px;
-  text-align: center;
+  width: 152px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.user-actions .small-btn {
+  padding: 8px 10px;
+  font-size: 12px;
+  vertical-align: middle;
+}
+
+.user-actions .delete-user-button {
+  margin-left: 8px;
+  vertical-align: middle;
 }
 
 .delete-user-button {
