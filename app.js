@@ -861,7 +861,7 @@ function renderUsers(user) {
     <div class="grid-2">
       <section class="panel">
         <h2>Usuários cadastrados</h2>
-        ${teamRows ? `<table><thead><tr><th>Nome</th><th>Perfil</th><th><span class="sr-only">Ações</span></th></tr></thead><tbody>${teamRows}</tbody></table>` : `<div class="empty">Ainda não há pessoas cadastradas.</div>`}
+        ${teamRows ? `<table><thead><tr><th>Nome</th><th>Perfil</th><th class="team-actions-heading"><span class="sr-only">Ações</span></th></tr></thead><tbody>${teamRows}</tbody></table>` : `<div class="empty">Ainda não há pessoas cadastradas.</div>`}
       </section>
       <form class="card" id="user-form">
         <h2>Cadastrar pessoa</h2>
