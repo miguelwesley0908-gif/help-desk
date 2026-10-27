@@ -814,7 +814,7 @@ function renderNew(user) {
       <div class="field"><label for="title">Título</label><input id="title" name="title" required maxlength="90" placeholder="Ex.: Impressora da recepção sem papel" /></div>
       <div class="field"><label for="description">Descrição</label><textarea id="description" name="description" required placeholder="O que aconteceu, desde quando e quem foi afetado."></textarea></div>
       <div class="field"><label for="location">Local (opcional)</label><input id="location" name="location" maxlength="120" placeholder="Ex.: sala de reuniões ou mesa 12" /></div>
-      <div class="filters"><div class="field"><label>Categoria</label><select name="category">${CATEGORIES.map((value) => `<option value="${value}">${CATEGORY_LABELS[value]}</option>`).join("")}</select></div>
+      <div class="filters ticket-form-options"><div class="field category-field"><label>Categoria</label><select name="category">${CATEGORIES.map((value) => `<option value="${value}">${CATEGORY_LABELS[value]}</option>`).join("")}</select></div>
         <div class="field"><label>Prioridade</label><select name="priority">${PRIORITIES.map((value) => `<option value="${value}">${LABELS[value]}</option>`).join("")}</select></div>
         <div class="field"><label for="ticket-assignee">Atribuir a</label><select id="ticket-assignee" name="assigneeId" required><option value="">Selecione uma pessoa</option>${assignees.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)} · ${escapeHtml(LABELS[item.role] || item.role)}</option>`).join("")}</select></div></div>
       <button class="btn copper" type="submit">Registrar chamado</button>
