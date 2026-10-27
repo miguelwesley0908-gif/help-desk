@@ -32,8 +32,15 @@ create table if not exists public.ticket_attachments (
   file_path text not null unique,
   mime_type text not null,
   file_size bigint not null check (file_size > 0 and file_size <= 10485760),
-  created_at timestamptz not null default now()
+  quote_amount numeric(12,2),
+  created_at timestamptz not null default now(),
+  constraint ticket_attachments_quote_amount_check check (quote_amount is null or quote_amount > 0)
 );
+alter table public.ticket_attachments add column if not exists quote_amount numeric(12,2);
+alter table public.ticket_attachments drop constraint if exists ticket_attachments_quote_amount_check;
+alter table public.ticket_attachments add constraint ticket_attachments_quote_amount_check check (quote_amount is null or quote_amount > 0);
+alter table public.tickets add column if not exists approved_quote_attachment_id uuid references public.ticket_attachments(id) on delete set null;
+create index if not exists tickets_approved_quote_attachment_idx on public.tickets(approved_quote_attachment_id);
 create index if not exists ticket_attachments_ticket_idx on public.ticket_attachments(ticket_id, created_at);
 
 create table if not exists public.notifications (
@@ -66,8 +73,10 @@ begin
     end if;
     if actor_role = 'financeiro' and (old.workflow_owner_id is distinct from new.workflow_owner_id
       or old.financial_assignee_id is distinct from new.financial_assignee_id
-      or old.budget_amount is distinct from new.budget_amount) then
-      raise exception 'O Financeiro pode registrar a decisão, sem alterar responsáveis ou valor do orçamento.';
+      or ((old.budget_amount is distinct from new.budget_amount or old.approved_quote_attachment_id is distinct from new.approved_quote_attachment_id)
+        and not (old.workflow_step = 'financeiro' and new.workflow_step = 'execucao'
+          and actor_id = old.assignee_id and new.finance_decision = 'aprovado'))) then
+      raise exception 'O Financeiro só pode alterar o orçamento ao aprovar uma opção cadastrada.';
     end if;
   end if;
 
@@ -99,14 +108,18 @@ begin
         raise exception 'Somente Andreza pode encaminhar o orçamento.';
       end if;
       if new.financial_assignee_id is null or new.assignee_id is distinct from new.financial_assignee_id
-         or new.budget_amount is null or not exists (select 1 from public.ticket_attachments a where a.ticket_id = old.id) then
-        raise exception 'Informe o Financeiro, o valor e anexe o orçamento antes de encaminhar.';
+         or not exists (select 1 from public.ticket_attachments a where a.ticket_id = old.id and a.quote_amount is not null) then
+        raise exception 'Informe o Financeiro e cadastre ao menos um orçamento com valor e arquivo antes de encaminhar.';
       end if;
     elsif old.workflow_step = 'financeiro' and new.workflow_step in ('execucao', 'orcamento') then
       if actor_role not in ('admin', 'coordenador') and actor_id is distinct from old.assignee_id then
         raise exception 'Somente o Financeiro responsável pode decidir o orçamento.';
       end if;
-      if (new.workflow_step = 'execucao' and (new.finance_decision <> 'aprovado' or new.assignee_id is distinct from new.workflow_owner_id))
+      if (new.workflow_step = 'execucao' and (new.finance_decision <> 'aprovado' or new.assignee_id is distinct from new.workflow_owner_id
+           or new.approved_quote_attachment_id is null or not exists (
+             select 1 from public.ticket_attachments a
+             where a.id = new.approved_quote_attachment_id and a.ticket_id = old.id and a.quote_amount = new.budget_amount
+           )))
          or (new.workflow_step = 'orcamento' and (new.finance_decision <> 'rejeitado' or new.assignee_id is distinct from new.workflow_owner_id or char_length(trim(new.finance_note)) = 0)) then
         raise exception 'Registre a decisão e devolva o chamado à Andreza.';
       end if;
@@ -192,7 +205,7 @@ begin
         and (old.assignee_id is distinct from new.assignee_id or old.workflow_owner_id is distinct from new.workflow_owner_id)
         then 'Chamado atribuído'
       when new.workflow_step = 'orcamento' then 'Ação necessária: orçamento'
-      when new.workflow_step = 'financeiro' then 'Orçamento aguardando aprovação'
+      when new.workflow_step = 'financeiro' then 'Orçamentos aguardando aprovação'
       when new.workflow_step = 'execucao' then 'Orçamento aprovado'
       when new.workflow_step = 'encerrado' then 'Chamado encerrado'
       else 'Chamado atualizado'
@@ -223,12 +236,18 @@ drop policy if exists "Team can read ticket attachments" on public.ticket_attach
 create policy "Team can read ticket attachments" on public.ticket_attachments for select to authenticated
 using (exists (select 1 from public.tickets t where t.id = ticket_id));
 drop policy if exists "Assigned staff can add ticket attachments" on public.ticket_attachments;
+drop policy if exists "Assigned staff can add ticket attachments" on public.ticket_attachments;
 create policy "Assigned staff can add ticket attachments" on public.ticket_attachments for insert to authenticated
-with check (uploader_id = (select auth.uid()) and exists (
-  select 1 from public.tickets t where t.id = ticket_id
-  and file_path like t.id::text || '/%'
-  and (t.workflow_owner_id = (select auth.uid()) or t.assignee_id = (select auth.uid()) or public.current_app_role() in ('admin', 'coordenador'))
-));
+with check (
+  uploader_id = (select auth.uid())
+  and exists (
+    select 1 from public.tickets t
+    where t.id = ticket_id
+      and file_path like t.id::text || '/%'
+      and (t.workflow_owner_id = (select auth.uid()) or t.assignee_id = (select auth.uid()) or public.current_app_role() in ('admin', 'coordenador'))
+      and (quote_amount is null or (t.workflow_step = 'orcamento' and (t.workflow_owner_id = (select auth.uid()) or public.current_app_role() in ('admin', 'coordenador'))))
+  )
+);
 
 drop policy if exists "Users can read own notifications" on public.notifications;
 create policy "Users can read own notifications" on public.notifications for select to authenticated
@@ -263,10 +282,10 @@ with check (author_id = (select auth.uid()) and exists (
 ));
 
 grant select on public.ticket_attachments, public.notifications to authenticated;
-grant insert (ticket_id, uploader_id, file_name, file_path, mime_type, file_size) on public.ticket_attachments to authenticated;
+grant insert (ticket_id, uploader_id, file_name, file_path, mime_type, file_size, quote_amount) on public.ticket_attachments to authenticated;
 grant insert (title, description, category, priority, office_id, location, requester_id, assignee_id, workflow_owner_id) on public.tickets to authenticated;
 grant update (read_at) on public.notifications to authenticated;
-grant update (status, priority, assignee_id, workflow_owner_id, financial_assignee_id, workflow_step, budget_amount, finance_decision, finance_note) on public.tickets to authenticated;
+grant update (status, priority, assignee_id, workflow_owner_id, financial_assignee_id, workflow_step, budget_amount, finance_decision, finance_note, approved_quote_attachment_id) on public.tickets to authenticated;
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values ('ticket-files', 'ticket-files', false, 10485760, array['application/pdf', 'image/jpeg', 'image/png', 'image/webp'])
