@@ -1,95 +1,125 @@
-# Hekp Gesk — MVP de help desk
+# Hekp Gesk — Help Desk
 
-Aplicação web para abrir e acompanhar chamados dos escritórios. A autenticação e os dados compartilhados usam Supabase (Auth + Postgres), com regras de acesso aplicadas no banco.
+Aplicação web para abertura e acompanhamento de chamados, aprovação de orçamentos e reserva de salas. A autenticação e os dados compartilhados usam Supabase; as regras de acesso são aplicadas no banco.
+
+## Arquitetura
+
+A interface é uma aplicação de página única (SPA), sem framework de frontend nem etapa de compilação. O navegador carrega os arquivos estáticos e usa `supabase-js` para autenticação e acesso aos dados.
+
+```mermaid
+flowchart LR
+    browser["Navegador<br/>index.html · app.js · styles.css"] --> auth["Supabase Auth"]
+    browser --> api["Supabase Data API"]
+    api --> rls["Políticas RLS"]
+    rls --> db[("Postgres")]
+    db --> triggers["Triggers<br/>validação · histórico · notificações"]
+    browser --> storage["Supabase Storage<br/>anexos privados"]
+    browser --> functions["Supabase Edge Functions<br/>gestão de usuários"]
+    functions --> db
+```
+
+- `index.html` carrega a aplicação; `app.js` controla as telas, as rotas pelo hash (por exemplo, `#/dashboard`) e as chamadas ao Supabase; `styles.css` contém o visual.
+- O Supabase Auth gerencia contas e sessões. O Postgres guarda perfis, chamados, comentários, eventos, notificações, anexos e reservas.
+- RLS aplica permissões por perfil e por chamado. As verificações na interface organizam o que aparece; a segurança não depende de esconder botões.
+- Triggers validam transições, registram mudanças no histórico e geram notificações. Orçamentos e outros arquivos ficam em um bucket privado.
+- Edge Functions fazem operações administrativas de conta no servidor, sem expor uma chave privilegiada no navegador.
 
 ## Configurar o Supabase
 
-1. Crie um projeto no Supabase.
-2. No SQL Editor do projeto, execute o arquivo `supabase-schema.sql`.
-3. Em **Project Settings → API**, copie a URL do projeto e a chave **publishable**. Abra `config.js` e preencha `url` e `publishableKey`.
-4. Em **Authentication → Users**, crie o primeiro usuário administrador com e-mail e senha. Desative o cadastro público de usuários nas configurações de Auth.
-5. No SQL Editor, localize o UUID do usuário em **Authentication → Users** e consulte o escritório que será associado:
+1. Crie um projeto Supabase.
+2. No SQL Editor, execute [`supabase-schema.sql`](supabase-schema.sql).
+3. Em **Authentication → Users**, crie a conta inicial de administração. Desative o cadastro público.
+4. Consulte os escritórios criados pelo esquema:
 
    ```sql
    select id, name from public.offices order by name;
    ```
 
-6. Crie o perfil do administrador, substituindo os dois UUIDs pelos valores do seu projeto:
+5. Crie o perfil de administração, substituindo os UUIDs:
 
    ```sql
    insert into public.profiles (id, name, role, office_id)
    values ('UUID_DO_USUARIO_AUTH', 'Nome do administrador', 'admin', 'UUID_DO_ESCRITORIO');
    ```
 
-7. Para cadastrar usuários pela aplicação, publique a função `create-user` uma vez:
+6. Em **Project Settings → API**, copie a URL do projeto e a chave **publishable**. Preencha `url` e `publishableKey` em `config.js`. Não coloque chaves `secret` ou `service_role` no navegador.
 
-   - No projeto Supabase, abra **Edge Functions → Deploy a new function → Via Editor**.
-   - Nomeie a função `create-user`.
-   - Copie o conteúdo de `supabase/functions/create-user/index.ts` para o editor.
-   - Mantenha a verificação JWT ativa e clique em **Deploy function**.
+### Migrações
 
-   O Supabase disponibiliza as chaves secretas à Edge Function no servidor. Não copie nenhuma chave secreta para o navegador. Consulte a [documentação de publicação pelo Dashboard](https://supabase.com/docs/guides/functions/quickstart-dashboard) e [segurança de Edge Functions](https://supabase.com/docs/guides/functions/auth).
+Execute no SQL Editor do mesmo projeto, nesta ordem:
 
-8. Entre no app com a conta administradora. No menu **Equipe**, crie colaboradores, pessoas do Financeiro e coordenadores. As novas contas ficam associadas automaticamente ao escritório do administrador. O formulário não permite criar outra conta de administração.
+1. [`supabase/room-reservations.sql`](supabase/room-reservations.sql) — salas, reservas e bloqueio de horários sobrepostos. É opcional se o módulo de salas não for usado.
+2. [`supabase/user-permissions.sql`](supabase/user-permissions.sql) — políticas e permissões dos perfis atuais.
+3. [`supabase/ticket-workflow.sql`](supabase/ticket-workflow.sql) — etapas do fluxo, anexos privados, notificações, validações e políticas do processo de orçamento.
+4. [`supabase/ticket-assignment.sql`](supabase/ticket-assignment.sql) — permite escolher o primeiro responsável ao abrir o chamado.
+5. [`supabase/finance-track-all-tickets.sql`](supabase/finance-track-all-tickets.sql) — permite que o Financeiro leia todos os chamados até a conclusão; não amplia as permissões de edição.
 
-9. Para permitir que administração e coordenação excluam contas pela página **Equipe**, execute [`supabase/account-deletion.sql`](supabase/account-deletion.sql) no SQL Editor. Depois, publique a Edge Function `delete-user`: crie uma função com esse nome em **Edge Functions → Deploy a new function → Via Editor**, copie `supabase/functions/delete-user/index.ts`, mantenha a verificação JWT ativa e publique. A lixeira não aparece para a própria conta nem para contas de administração ou coordenação. Chamados, comentários e reservas são mantidos no histórico sem vínculo com a conta excluída.
+Em um projeto já em uso, confira quais migrações foram aplicadas antes de executar arquivos novamente. O arquivo de reservas pode ser reaplicado sem apagar reservas existentes.
 
-## Reservas de salas
+### Funções de usuário
 
-Depois de executar o esquema inicial, abra o **SQL Editor** do mesmo projeto Supabase e execute [`supabase/room-reservations.sql`](supabase/room-reservations.sql). O arquivo cria as salas, as reservas, as permissões e a função que consulta somente os horários ocupados. Ele pode ser executado novamente sem apagar reservas existentes. Se o aplicativo for publicado antes dessa migração, os chamados continuam disponíveis e a agenda mostra um aviso de configuração pendente.
+Para cadastrar usuários pelo menu **Equipe**, publique a Edge Function `create-user`:
 
-Entre com uma conta de **administração** e abra **Reservas de salas** para cadastrar as salas de cada escritório. Depois disso, pessoas com perfil **colaborador** já podem consultar horários e reservar. Não é necessário criar um perfil de advogado: o colaborador é o advogado neste fluxo.
+1. Em **Edge Functions → Deploy a new function → Via Editor**, crie uma função chamada `create-user`.
+2. Copie `supabase/functions/create-user/index.ts`, mantenha a verificação JWT ativa e publique.
 
-- A agenda usa o horário de Brasília (`America/Sao_Paulo`) e oferece reuniões de 30, 60, 90 ou 120 minutos entre 08:00 e 18:00.
-- Todos os usuários autenticados veem as reuniões agendadas, incluindo cliente e assunto. Cada pessoa pode editar ou cancelar as próprias reuniões; administração e coordenação podem gerenciar qualquer reunião e consultar o resumo por advogado e cliente.
-- A reserva é confirmada ao salvar. O banco bloqueia reservas sobrepostas para a mesma sala, mesmo que duas pessoas tentem salvar ao mesmo tempo. Uma reserva cancelada libera o horário.
-- A administração pode ativar ou desativar salas. Desativar impede novas reservas sem apagar o histórico.
-- Todos os usuários autenticados podem consultar as reuniões, incluindo cliente e assunto. Cada pessoa pode editar ou cancelar as próprias reuniões; administração e coordenação podem gerenciar todas.
+Publique também as funções necessárias:
+
+- `update-user`, com o código de `supabase/functions/update-user/index.ts`, para alterar perfis pelo menu **Equipe**.
+- `delete-user`, com o código de `supabase/functions/delete-user/index.ts`, se quiser habilitar a exclusão de contas. Antes, execute [`supabase/account-deletion.sql`](supabase/account-deletion.sql).
+
+As funções verificam o perfil da pessoa que fez a chamada. O Supabase mantém as credenciais administrativas no servidor. Consulte a [publicação de Edge Functions pelo Dashboard](https://supabase.com/docs/guides/functions/quickstart-dashboard) e a [segurança de Edge Functions](https://supabase.com/docs/guides/functions/auth).
 
 ## Perfis e permissões
 
-Para aplicar os novos perfis em um projeto Supabase já existente, execute [`supabase/user-permissions.sql`](supabase/user-permissions.sql) depois das migrações de reservas de salas. Publique novamente as Edge Functions `create-user` e `delete-user` e publique `update-user` para permitir alterar perfis na página **Equipe**. Crie a função `update-user` em **Edge Functions → Deploy a new function → Via Editor**, copie `supabase/functions/update-user/index.ts`, mantenha a verificação JWT ativa e publique.
+Os valores de perfil no banco são `colaborador`, `financeiro`, `coordenador` e `admin`. A tela mostra `admin` como **Administração**. Não existe um perfil separado chamado “Atendente”.
 
-- **Colaborador:** consulta os chamados que abriu ou que foram atribuídos a ele; só pode comentar ou alterar chamados atribuídos a ele.
-- **Financeiro:** consulta todos os chamados, comentários, histórico e anexos. Só pode decidir orçamentos atribuídos a ele; não pode trocar responsáveis nem alterar o valor recebido. Também pode consultar todas as reuniões e editar ou cancelar apenas as próprias.
-- **Coordenador:** tem as permissões de administração: pode gerenciar todos os chamados e reuniões, atribuir chamados, administrar salas, escritórios e contas de equipe.
-- **Administração:** mantém as permissões completas do sistema.
+- **Colaborador:** abre chamados para seu escritório e consulta os chamados que abriu ou que foram atribuídos a ele.
+- **Financeiro:** consulta todos os chamados, comentários, histórico e anexos. Pode aprovar ou rejeitar apenas os orçamentos atribuídos a ele na etapa financeira; não pode mudar responsáveis nem o valor enviado.
+- **Coordenador:** pode administrar chamados e reservas, alterar responsáveis e perfis da equipe, além de gerenciar salas.
+- **Administração:** tem as permissões completas do sistema.
 
-As regras também são aplicadas no Supabase, então esconder um botão no navegador não é a única proteção.
+A aplicação não permite criar outro perfil `admin` pelo formulário. Para dar administração a uma conta, isso precisa ser feito por um administrador autorizado no Supabase.
 
-## Fluxo de orçamento e aprovação
+## Fluxo do chamado e do orçamento
 
-Depois das migrações acima, execute [`supabase/ticket-workflow.sql`](supabase/ticket-workflow.sql) no SQL Editor. Ela adiciona as etapas do fluxo, o perfil Financeiro, anexos privados, notificações internas, validações e políticas RLS. Para cadastrar pessoas do Financeiro pela tela **Equipe**, publique novamente as Edge Functions `create-user` e `update-user` usando os arquivos atualizados em `supabase/functions/`.
+O sistema mantém dois conceitos separados:
 
-Em seguida, execute [`supabase/ticket-assignment.sql`](supabase/ticket-assignment.sql). Na abertura do chamado, quem solicita escolhe uma pessoa responsável; o escritório fica oculto e é preenchido automaticamente pelo perfil de quem abriu o chamado.
+- `status` é o estado apresentado no chamado: `aberto`, `andamento`, `aguardando`, `resolvido` ou `encerrado`.
+- `workflow_step` representa a etapa do processo: `triagem`, `orcamento`, `financeiro`, `execucao` ou `resolvido`.
 
-Para permitir que o Financeiro acompanhe todos os chamados até a conclusão em um projeto já configurado, execute [`supabase/finance-track-all-tickets.sql`](supabase/finance-track-all-tickets.sql) no SQL Editor. A regra amplia somente a leitura; as permissões de edição continuam limitadas ao responsável atual e às transições do fluxo.
+O fluxo padrão é:
 
-1. Em **Equipe**, crie o usuário da Andreza com perfil **Atendente** e o usuário do Financeiro com perfil **Financeiro**. Use contas separadas da sua conta de administração.
-2. No chamado, administração ou coordenação escolhe Andreza como responsável contínua, escolhe a pessoa do Financeiro e inicia o contato. Andreza continua acompanhando mesmo quando o Financeiro assume a etapa.
-3. Andreza contata Thomas fora do app, anexa o orçamento em PDF ou imagem e informa o valor. O chamado passa ao Financeiro.
-4. O Financeiro aprova ou rejeita e registra a observação. A decisão fica no histórico; o chamado volta para Andreza.
-5. Após combinar e acompanhar o serviço com Thomas, Andreza confirma a conclusão e resolve o chamado.
+1. Administração ou coordenação define a pessoa responsável pelo acompanhamento e a pessoa do Financeiro.
+2. A pessoa responsável inicia o contato e obtém o orçamento.
+3. O orçamento e o valor são registrados, e o chamado segue para o Financeiro.
+4. O Financeiro aprova ou rejeita. Uma rejeição exige observação; a decisão fica no histórico e o chamado volta à pessoa responsável.
+5. Depois da execução, a pessoa responsável confirma a conclusão. Essa ação conclui a etapa e marca o chamado como resolvido.
 
-As notificações aparecem dentro do app e são atualizadas em até 30 segundos enquanto a sessão estiver aberta. Este fluxo não envia e-mail nem integra o WhatsApp. Os arquivos ficam em bucket privado do Supabase Storage e os links de visualização expiram após um minuto.
+Administração e coordenação também podem ajustar manualmente o status no chamado, exceto **Resolvido**, que é definido pela ação de conclusão do fluxo. Como status e etapa são campos separados, prefira as ações do fluxo para avançar ou concluir o processo.
 
-## Abrir e publicar
+As notificações são internas ao app. O painel busca as não lidas e atualiza a lista periodicamente enquanto a sessão está aberta. Ao abrir uma notificação, o sistema salva `read_at` para aquela pessoa; a leitura não apaga o histórico do banco nem oculta a notificação para outros destinatários. O sistema não envia e-mail nem integra WhatsApp.
 
-Para uma verificação inicial, sirva esta pasta por um servidor web estático e abra o endereço local. Para uso da equipe, publique os arquivos em uma hospedagem estática com HTTPS (por exemplo, Vercel ou Netlify). `index.html`, `app.js`, `styles.css` e `config.js` precisam estar no mesmo diretório.
+Os anexos ficam em bucket privado do Supabase Storage. Os links para visualização expiram após um minuto.
 
-Para permitir redefinição de senha, em **Authentication → URL Configuration → Redirect URLs**, adicione o endereço completo do app seguido de `?auth-recovery=1` (por exemplo, `https://seu-dominio.com/?auth-recovery=1`). O endereço precisa corresponder ao endereço em que o app está aberto; em desenvolvimento local, autorize também a URL local usada pelo servidor web. O link enviado antes de publicar essa tela deve ser solicitado novamente depois da configuração.
+## Reservas de salas
 
-O navegador carrega `supabase-js` pela CDN jsDelivr, então a hospedagem e os navegadores precisam de acesso à internet. A URL do projeto e a chave **publishable** são usadas pelo cliente web; a segurança dos dados depende das políticas RLS incluídas no SQL. Nunca use chaves `secret` ou `service_role` no navegador nem em `config.js`.
+Depois de executar `supabase/room-reservations.sql`, entre com um perfil de administração ou coordenação e cadastre as salas em **Reservas de salas**.
 
-## Papéis e dados
+- Os horários usam o fuso de Brasília (`America/Sao_Paulo`) e aceitam reuniões de 30, 60, 90 ou 120 minutos, entre 08:00 e 18:00.
+- Todas as pessoas autenticadas podem consultar as reuniões. Cada uma pode editar ou cancelar as próprias reservas; administração e coordenação podem gerenciar todas.
+- O banco impede reservas sobrepostas para a mesma sala. Cancelar uma reserva libera o horário sem apagar o histórico.
 
-- **Colaborador:** abre chamados para o próprio escritório e consulta somente os que abriu ou que foram atribuídos a ele. Só pode comentar ou atualizar os que estiverem atribuídos a ele.
-- **Atendente:** consulta chamados atribuídos a ele ou que abriu. A pessoa atribuída como responsável contínua também acompanha e comenta durante as etapas de aprovação.
-- **Financeiro:** consulta e decide orçamentos atribuídos a ele. Não pode trocar os responsáveis nem alterar o valor recebido.
-- **Coordenador e administração:** podem consultar e gerenciar todos os chamados, atribuí-los e administrar escritórios, salas e contas de equipe.
-- Comentários e alterações de status, prioridade e responsável aparecem no histórico e seguem a mesma visibilidade do chamado.
-- Senhas e sessões são gerenciadas pelo Supabase Auth. Não há contas ou chamados de demonstração no app.
+Se o app for publicado antes dessa migração, os chamados continuam disponíveis e o módulo de reservas exibe um aviso de configuração pendente.
 
-## Limites deste MVP
+## Publicar e executar
 
-O MVP envia notificações somente dentro do app, não envia e-mail, não integra o WhatsApp e não define SLA. A conta inicial de administração ainda precisa ser criada no Supabase antes da primeira entrada. Faça um piloto com dados não sensíveis até revisar o acesso, backups e políticas operacionais do projeto.
+O frontend é composto por arquivos estáticos e pode ser servido por uma hospedagem HTTPS. Neste projeto, a publicação está configurada no Cloudflare Workers a partir do repositório; atualizações na branch principal seguem o deploy automático configurado.
+
+Para desenvolvimento, sirva a pasta por um servidor web estático. Mantenha `index.html`, `app.js`, `styles.css` e `config.js` acessíveis no mesmo diretório. O navegador carrega `supabase-js` pela CDN jsDelivr, então precisa de acesso à internet.
+
+Para habilitar redefinição de senha, em **Authentication → URL Configuration → Redirect URLs**, permita o endereço do app com `?auth-recovery=1`, por exemplo `https://seu-dominio.com/?auth-recovery=1`. O endereço cadastrado deve corresponder ao domínio em que o app está aberto.
+
+## Limites atuais
+
+O projeto é um MVP: não define SLA, não envia notificações por e-mail ou WhatsApp e não inclui contas ou chamados de demonstração. Antes de usar dados sensíveis, revise as políticas RLS, os backups e os procedimentos operacionais do projeto.
