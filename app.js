@@ -6,6 +6,7 @@ const CATEGORY_LABELS = {
 };
 const PRIORITIES = ["baixa", "media", "alta", "urgente"];
 const STATUSES = ["aberto", "andamento", "aguardando", "resolvido", "encerrado"];
+const TICKET_FILTER_STATUSES = STATUSES.filter((value) => value !== "resolvido");
 const WORKFLOW_STEPS = ["triagem", "orcamento", "financeiro", "execucao", "resolvido"];
 const BOOKING_TIME_ZONE = "America/Sao_Paulo";
 const BOOKING_DURATIONS = [30, 60, 90, 120];
@@ -26,6 +27,7 @@ let reservationDuration = 60;
 let reservationOfficeId = null;
 let adminBookingQuery = "";
 let adminBookingLawyerId = "";
+let ticketFilters = { query: "", category: "", priority: "", status: "" };
 let selectedSlot = null;
 let availabilityRequest = 0;
 let notificationPoll = null;
@@ -795,15 +797,22 @@ function renderDashboard(user) {
 }
 
 function renderTickets(user) {
-  const q = document.getElementById("q")?.value || "";
-  const status = document.getElementById("status")?.value || "";
+  const { query, category, priority, status } = ticketFilters;
   let tickets = visibleTickets(user);
-  const query = q.toLowerCase();
-  if (query) tickets = tickets.filter((ticket) => ticket.title.toLowerCase().includes(query) || ticket.number.toLowerCase().includes(query) || ticket.category.toLowerCase().includes(query));
+  const normalizedQuery = query.toLowerCase();
+  if (normalizedQuery) tickets = tickets.filter((ticket) =>
+    ticket.title.toLowerCase().includes(normalizedQuery)
+    || ticket.number.toLowerCase().includes(normalizedQuery)
+    || ticket.category.toLowerCase().includes(normalizedQuery));
+  if (category) tickets = tickets.filter((ticket) => ticket.category === category);
+  if (priority) tickets = tickets.filter((ticket) => ticket.priority === priority);
   if (status) tickets = tickets.filter((ticket) => ticket.status === status);
   return layout(user, "Chamados", `<button class="btn copper" data-go="/new">Abrir chamado</button>`, `
-    <div class="filters"><input id="q" placeholder="Buscar por título, nº ou categoria" value="${escapeHtml(q)}" />
-      <select id="status"><option value="">Todos os status</option>${STATUSES.map((value) => `<option value="${value}" ${status === value ? "selected" : ""}>${LABELS[value]}</option>`).join("")}</select>
+    <div class="filters ticket-filters">
+      <input id="q" aria-label="Buscar chamados" placeholder="Buscar por título, nº ou categoria" value="${escapeHtml(query)}" />
+      <select id="category" aria-label="Filtrar por categoria"><option value="">Todas as categorias</option>${CATEGORIES.map((value) => `<option value="${value}" ${category === value ? "selected" : ""}>${value}</option>`).join("")}</select>
+      <select id="priority" aria-label="Filtrar por prioridade"><option value="">Todas as prioridades</option>${PRIORITIES.map((value) => `<option value="${value}" ${priority === value ? "selected" : ""}>${LABELS[value]}</option>`).join("")}</select>
+      <select id="status" aria-label="Filtrar por status"><option value="">Todos os status</option>${TICKET_FILTER_STATUSES.map((value) => `<option value="${value}" ${status === value ? "selected" : ""}>${LABELS[value]}</option>`).join("")}</select>
     </div><section class="panel">${ticketTable(tickets, user)}</section>`);
 }
 
@@ -1025,18 +1034,20 @@ function bind() {
     event.preventDefault(); const data = new FormData(quoteForm);
     submitQuoteForApproval(route.id, String(data.get("amount")), data.get("quote"));
   });
-  ["q", "status"].forEach((id) => {
-    const element = document.getElementById(id);
-    if (element) element.addEventListener("input", () => {
-      const cursor = id === "q" ? element.selectionStart : null;
+  const ticketSearch = document.getElementById("q");
+  ticketSearch?.addEventListener("input", (event) => {
+    ticketFilters.query = event.target.value;
+    const cursor = event.target.selectionStart;
+    render();
+    const refreshed = document.getElementById("q");
+    refreshed?.focus();
+    if (cursor !== null) refreshed?.setSelectionRange(cursor, cursor);
+  });
+  ["category", "priority", "status"].forEach((id) => {
+    document.getElementById(id)?.addEventListener("change", (event) => {
+      ticketFilters[id] = event.target.value;
       render();
-      if (id === "q") {
-        const refreshed = document.getElementById("q");
-        refreshed?.focus();
-        if (cursor !== null) refreshed?.setSelectionRange(cursor, cursor);
-      }
     });
-    if (element?.tagName === "SELECT") element.addEventListener("change", () => render());
   });
 }
 
