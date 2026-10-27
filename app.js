@@ -416,8 +416,8 @@ async function saveTicketExpense(ticketId, amount, paidAt) {
 
 async function completeWorkflowTicket(id) {
   try {
-    checkError(await db.from("tickets").update({ workflow_step: "resolvido", status: "resolvido" }).eq("id", id).select("id").single());
-    flashSuccess = "Chamado marcado como resolvido.";
+    checkError(await db.from("tickets").update({ workflow_step: "resolvido", status: "encerrado" }).eq("id", id).select("id").single());
+    flashSuccess = "Chamado encerrado após a confirmação do serviço.";
     await loadWorkspace();
   } catch (error) { showError(error); }
 }
@@ -908,7 +908,7 @@ function renderTicket(user) {
       ${ticket.workflowStep === "orcamento" && isOwner ? `<form id="quote-form" class="workflow-form"><h3>Enviar orçamento ao Financeiro</h3><p class="hint">Registre o valor e anexe o orçamento recebido do Thomas.</p><div class="field"><label>Valor (R$)</label><input name="amount" type="number" min="0.01" step="0.01" required /></div><div class="field"><label>Arquivo do orçamento</label><input name="quote" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,application/pdf,image/jpeg,image/png,image/webp" required /></div><button class="btn copper full" type="submit">Encaminhar para aprovação</button></form>` : ""}
       ${ticket.workflowStep === "financeiro" && user.role === "financeiro" && ticket.assigneeId === user.id ? `<form id="finance-form" class="workflow-form"><h3>Decisão do Financeiro</h3><div class="field"><label>Observação (obrigatória para rejeitar)</label><textarea name="note" placeholder="Motivo da decisão"></textarea></div><div class="filters"><button class="btn copper" type="button" data-finance-decision="approve">Aprovar</button><button class="btn secondary" type="button" data-finance-decision="reject">Rejeitar</button></div></form>` : ""}
       ${user.role === "financeiro" && ticket.financialAssigneeId === user.id && ticket.financeDecision === "aprovado" && ["execucao", "resolvido"].includes(ticket.workflowStep) ? (() => { const expense = financeExpenses.find((item) => item.ticketId === ticket.id); return `<form id="ticket-expense-form" class="workflow-form"><h3>Gasto realizado</h3><p class="hint">Registre o valor depois que o pagamento for confirmado.</p><div class="field"><label for="expense-amount">Valor pago (R$)</label><input id="expense-amount" name="amount" type="number" min="0" step="0.01" required value="${expense ? expense.amount.toFixed(2) : ""}" /></div><div class="field"><label for="expense-paid-at">Data do pagamento</label><input id="expense-paid-at" name="paidAt" type="date" max="${dateInBookingZone()}" required value="${expense?.paidAt || dateInBookingZone()}" /></div><button class="btn copper full" type="submit">${expense ? "Atualizar gasto" : "Registrar gasto"}</button></form>`; })() : ""}
-      ${ticket.workflowStep === "execucao" && isOwner ? `<section class="workflow-form"><h3>Após a execução por Thomas</h3><p class="hint">Quando Thomas concluir o serviço, confirme para resolver o chamado.</p><button class="btn copper full" type="button" data-workflow-complete="${ticket.id}">Confirmar serviço e resolver</button></section>` : ""}
+      ${ticket.workflowStep === "execucao" && isOwner ? `<section class="workflow-form"><h3>Após a execução por Thomas</h3><p class="hint">Quando Thomas concluir o serviço, confirme para resolver o chamado.</p><button class="btn copper full" type="button" data-workflow-complete="${ticket.id}">Confirmar serviço e encerrar</button></section>` : ""}
       ${ticket.attachments.length ? `<section class="workflow-form"><h3>Orçamentos e arquivos</h3>${ticket.attachments.map((item) => `<button class="attachment-link" type="button" data-attachment-path="${escapeHtml(item.filePath)}">${escapeHtml(item.fileName)} · ${formatDate(item.createdAt)}</button>`).join("")}</section>` : ""}
     </aside></div>`);
 }
