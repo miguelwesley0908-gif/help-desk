@@ -5,19 +5,19 @@ const CATEGORY_LABELS = {
   Financeiro: "Financeiro — assuntos do departamento",
 };
 const PRIORITIES = ["baixa", "media", "alta", "urgente"];
-const STATUSES = ["aberto", "andamento", "aguardando", "resolvido", "encerrado"];
-const TICKET_FILTER_STATUSES = STATUSES.filter((value) => value !== "resolvido");
-const WORKFLOW_STEPS = ["triagem", "orcamento", "financeiro", "execucao", "resolvido"];
+const STATUSES = ["aberto", "andamento", "aguardando", "encerrado"];
+const TICKET_FILTER_STATUSES = STATUSES;
+const WORKFLOW_STEPS = ["triagem", "orcamento", "financeiro", "execucao", "encerrado"];
 const BOOKING_TIME_ZONE = "America/Sao_Paulo";
 const BOOKING_DURATIONS = [30, 60, 90, 120];
 const LABELS = {
   baixa: "Baixa", media: "Média", alta: "Alta", urgente: "Urgente",
   aberto: "Aberto", andamento: "Em andamento", aguardando: "Aguardando",
-  resolvido: "Resolvido", encerrado: "Encerrado",
+  encerrado: "Encerrado",
   colaborador: "Colaborador", admin: "Administração", coordenador: "Coordenador",
   financeiro: "Financeiro",
   triagem: "Aguardando responsável", orcamento: "Contato e orçamento", financeiro_etapa: "Aprovação financeira",
-  execucao: "Execução do serviço", fluxo_resolvido: "Fluxo resolvido",
+  execucao: "Execução do serviço", encerrado: "Chamado encerrado",
 };
 
 let db = null;
@@ -363,7 +363,7 @@ async function submitQuoteForApproval(id, amount, file) {
   if (!ticket?.workflowOwnerId || !ticket.financialAssigneeId) return showError(new Error("Atribua Andreza e uma pessoa do Financeiro antes de encaminhar o orçamento."));
   const parsedAmount = Number(String(amount).replace(",", "."));
   if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) return showError(new Error("Informe um valor de orçamento válido."));
-  if (!file) return showError(new Error("Anexe o orçamento recebido do Thomas."));
+  if (!file) return showError(new Error("Anexe o orçamento recebido do fornecedor ou prestador."));
   if (file.size > 10 * 1024 * 1024) return showError(new Error("O arquivo deve ter no máximo 10 MB."));
   flashError = "";
   try {
@@ -397,7 +397,7 @@ async function decideQuote(id, approved, note) {
 async function saveTicketExpense(ticketId, amount, paidAt) {
   const user = currentUser();
   const ticket = state.tickets.find((item) => item.id === ticketId);
-  if (user?.role !== "financeiro" || ticket?.financialAssigneeId !== user.id || ticket.financeDecision !== "aprovado" || !["execucao", "resolvido"].includes(ticket.workflowStep)) {
+  if (user?.role !== "financeiro" || ticket?.financialAssigneeId !== user.id || ticket.financeDecision !== "aprovado" || !["execucao", "encerrado"].includes(ticket.workflowStep)) {
     return showError(new Error("Somente o Financeiro responsável pode registrar o gasto após a aprovação."));
   }
   const parsedAmount = Number(String(amount).replace(",", "."));
@@ -416,7 +416,7 @@ async function saveTicketExpense(ticketId, amount, paidAt) {
 
 async function completeWorkflowTicket(id) {
   try {
-    checkError(await db.from("tickets").update({ workflow_step: "resolvido", status: "encerrado" }).eq("id", id).select("id").single());
+    checkError(await db.from("tickets").update({ workflow_step: "encerrado", status: "encerrado" }).eq("id", id).select("id").single());
     flashSuccess = "Chamado encerrado após a confirmação do serviço.";
     await loadWorkspace();
   } catch (error) { showError(error); }
@@ -427,7 +427,7 @@ async function startWorkflowTicket(id) {
   if (!ticket?.workflowOwnerId) return showError(new Error("Atribua Andreza como responsável pelo fluxo primeiro."));
   try {
     checkError(await db.from("tickets").update({ workflow_step: "orcamento", status: "andamento", assignee_id: ticket.workflowOwnerId }).eq("id", id).select("id").single());
-    flashSuccess = "Chamado atribuído à Andreza para contato com Thomas.";
+    flashSuccess = "Chamado atribuído à Andreza para contato com o fornecedor.";
     await loadWorkspace();
   } catch (error) { showError(error); }
 }
@@ -827,7 +827,7 @@ function renderDashboard(user) {
   const tickets = visibleTickets(user);
   const openish = tickets.filter((ticket) => ["aberto", "andamento", "aguardando"].includes(ticket.status));
   const urgent = tickets.filter((ticket) => ticket.priority === "urgente" && ticket.status !== "encerrado");
-  const mine = tickets.filter((ticket) => (ticket.assigneeId === user.id || ticket.workflowOwnerId === user.id) && !["resolvido", "encerrado"].includes(ticket.status));
+  const mine = tickets.filter((ticket) => (ticket.assigneeId === user.id || ticket.workflowOwnerId === user.id) && ticket.status !== "encerrado");
   const recent = tickets.slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 6);
   const upcomingMeetings = state.bookings.filter((booking) => !booking.canceledAt && new Date(booking.endsAt) > new Date() && (canAdminister(user) || booking.organizerId === user.id)).length;
   return layout(user, "Painel", `<button class="btn copper" data-go="/new">Novo chamado</button>`, `
@@ -886,7 +886,12 @@ function renderTimeline(ticket) {
     ...ticket.events.map((item) => ({ ...item, kind: "event" })),
   ].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   if (!timeline.length) return `<div class="hint">Ainda não há atualizações.</div>`;
-  return timeline.map((item) => `<div class="comment"><small>${escapeHtml(userById(item.authorId)?.name || (item.kind === "event" ? "Sistema" : "—"))} · ${formatDate(item.createdAt)}</small><div>${escapeHtml(item.body)}</div></div>`).join("");
+  return timeline.map((item) => {
+    const body = item.kind === "event"
+      ? item.body.replace(/(Status: .* → )resolvido$/, "$1encerrado").replace(/(Etapa do fluxo: .* → )resolvido$/, "$1encerrado")
+      : item.body;
+    return `<div class="comment"><small>${escapeHtml(userById(item.authorId)?.name || (item.kind === "event" ? "Sistema" : "—"))} · ${formatDate(item.createdAt)}</small><div>${escapeHtml(body)}</div></div>`;
+  }).join("");
 }
 
 function renderTicket(user) {
@@ -896,19 +901,19 @@ function renderTicket(user) {
   const assignee = userById(ticket.assigneeId);
   const mayEdit = canEditTicket(user, ticket);
   const isOwner = ticket.workflowOwnerId === user.id || canAdminister(user);
-  const workflowStepLabel = { triagem: "Aguardando atribuição", orcamento: "Contato com Thomas e orçamento", financeiro: "Aprovação do Financeiro", execucao: "Serviço aprovado, aguardando execução", resolvido: "Fluxo concluído" }[ticket.workflowStep] || ticket.workflowStep;
+  const workflowStepLabel = { triagem: "Aguardando atribuição", orcamento: "Contato com fornecedor e orçamento", financeiro: "Aprovação do Financeiro", execucao: "Serviço aprovado, aguardando execução", encerrado: "Encerrado" }[ticket.workflowStep] || ticket.workflowStep;
   const teamAssignees = state.users.filter((item) => ["financeiro", "admin", "coordenador"].includes(item.role));
   const ticketActions = `<button class="btn secondary" data-go="/tickets">Voltar à fila</button>${canAdminister(user) ? ` <button class="btn danger" type="button" data-delete-ticket="${escapeHtml(ticket.id)}">Excluir chamado</button>` : ""}`;
   return layout(user, ticket.number, ticketActions, `
     <div class="grid-2"><section class="detail"><h2 style="font-family:Fraunces,serif;margin:0 0 8px">${escapeHtml(ticket.title)}</h2><p>${escapeHtml(ticket.description)}</p><h3>Histórico</h3>
       <div class="comments">${renderTimeline(ticket)}</div>${mayEdit ? `<form id="comment-form"><div class="field"><label for="body">Nova atualização</label><textarea id="body" name="body" required placeholder="O que mudou?"></textarea></div><button class="btn" type="submit">Publicar</button></form>` : `<p class="hint">Somente a pessoa responsável pode comentar neste chamado.</p>`}
-    </section><aside class="detail"><dl class="meta-list"><div><span>Etapa do fluxo</span><strong>${escapeHtml(workflowStepLabel)}</strong></div><div><span>Status</span>${canAdminister(user) ? `<form id="status-form" style="display:flex;gap:8px;align-items:center"><select name="status" required aria-label="Alterar status do chamado">${ticket.status === "resolvido" ? `<option value="" selected disabled>Selecione para reabrir</option>` : ""}${STATUSES.filter((value) => value !== "resolvido").map((value) => `<option value="${value}" ${ticket.status === value ? "selected" : ""}>${LABELS[value]}</option>`).join("")}</select><button class="btn secondary small-btn" type="submit">"Salvar status"</button></form>` : badgeStatus(ticket.status)}</div><div><span>Prioridade</span>${badgePriority(ticket.priority)}</div><div><span>Categoria</span><span>${escapeHtml(ticket.category)}</span></div>${ticket.location ? `<div><span>Local</span><span>${escapeHtml(ticket.location)}</span></div>` : ""}<div><span>Solicitante</span><span>${escapeHtml(requester?.name || "—")}</span></div><div><span>Responsável atual</span><span>${escapeHtml(assignee?.name || "Fila livre")}</span></div><div><span>Responsável pelo fluxo</span><span>${escapeHtml(userById(ticket.workflowOwnerId)?.name || "Não atribuída")}</span></div><div><span>Financeiro</span><span>${escapeHtml(userById(ticket.financialAssigneeId)?.name || "Não atribuído")}</span></div>${ticket.budgetAmount ? `<div><span>Orçamento</span><span>${Number(ticket.budgetAmount).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</span></div>` : ""}${ticket.financeDecision !== "pendente" ? `<div><span>Decisão financeira</span><span>${ticket.financeDecision === "aprovado" ? "Aprovado" : "Rejeitado"}${ticket.financeNote ? ` — ${escapeHtml(ticket.financeNote)}` : ""}</span></div>` : ""}<div><span>Aberto</span><span>${formatDate(ticket.createdAt)}</span></div></dl>
+    </section><aside class="detail"><dl class="meta-list"><div><span>Etapa do fluxo</span><strong>${escapeHtml(workflowStepLabel)}</strong></div><div><span>Status</span>${canAdminister(user) ? `<form id="status-form" style="display:flex;gap:8px;align-items:center"><select name="status" required aria-label="Alterar status do chamado">${STATUSES.map((value) => `<option value="${value}" ${ticket.status === value ? "selected" : ""}>${LABELS[value]}</option>`).join("")}</select><button class="btn secondary small-btn" type="submit">Salvar status</button></form>` : badgeStatus(ticket.status)}</div><div><span>Prioridade</span>${badgePriority(ticket.priority)}</div><div><span>Categoria</span><span>${escapeHtml(ticket.category)}</span></div>${ticket.location ? `<div><span>Local</span><span>${escapeHtml(ticket.location)}</span></div>` : ""}<div><span>Solicitante</span><span>${escapeHtml(requester?.name || "—")}</span></div><div><span>Responsável atual</span><span>${escapeHtml(assignee?.name || "Fila livre")}</span></div><div><span>Responsável pelo fluxo</span><span>${escapeHtml(userById(ticket.workflowOwnerId)?.name || "Não atribuída")}</span></div><div><span>Financeiro</span><span>${escapeHtml(userById(ticket.financialAssigneeId)?.name || "Não atribuído")}</span></div>${ticket.budgetAmount ? `<div><span>Orçamento</span><span>${Number(ticket.budgetAmount).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</span></div>` : ""}${ticket.financeDecision !== "pendente" ? `<div><span>Decisão financeira</span><span>${ticket.financeDecision === "aprovado" ? "Aprovado" : "Rejeitado"}${ticket.financeNote ? ` — ${escapeHtml(ticket.financeNote)}` : ""}</span></div>` : ""}<div><span>Aberto</span><span>${formatDate(ticket.createdAt)}</span></div></dl>
       ${canAdminister(user) ? `<form id="manage-form" style="margin-top:18px"><h3>Responsáveis do fluxo</h3><div class="field"><label>Responsável pelo fluxo</label><select name="workflowOwnerId"><option value="">Selecione uma pessoa</option>${teamAssignees.map((item) => `<option value="${item.id}" ${ticket.workflowOwnerId === item.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></div><div class="field"><label>Responsável do Financeiro</label><select name="financialAssigneeId"><option value="">Selecione Financeiro</option>${state.users.filter((item) => item.role === "financeiro").map((item) => `<option value="${item.id}" ${ticket.financialAssigneeId === item.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></div><div class="field"><label>Responsável atual</label><select name="assigneeId"><option value="">Fila livre</option>${teamAssignees.map((item) => `<option value="${item.id}" ${ticket.assigneeId === item.id ? "selected" : ""}>${escapeHtml(item.name)} · ${LABELS[item.role]}</option>`).join("")}</select></div><div class="field"><label>Prioridade</label><select name="priority">${PRIORITIES.map((value) => `<option value="${value}" ${ticket.priority === value ? "selected" : ""}>${LABELS[value]}</option>`).join("")}</select></div><button class="btn copper full" type="submit">Salvar alterações</button></form>` : ""}
       ${ticket.workflowStep === "triagem" && isOwner ? `<button class="btn copper full workflow-action" type="button" data-workflow-start="${ticket.id}">Iniciar contato e pedir orçamento</button>` : ""}
-      ${ticket.workflowStep === "orcamento" && isOwner ? `<form id="quote-form" class="workflow-form"><h3>Enviar orçamento ao Financeiro</h3><p class="hint">Registre o valor e anexe o orçamento recebido do Thomas.</p><div class="field"><label>Valor (R$)</label><input name="amount" type="number" min="0.01" step="0.01" required /></div><div class="field"><label>Arquivo do orçamento</label><input name="quote" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,application/pdf,image/jpeg,image/png,image/webp" required /></div><button class="btn copper full" type="submit">Encaminhar para aprovação</button></form>` : ""}
+      ${ticket.workflowStep === "orcamento" && isOwner ? `<form id="quote-form" class="workflow-form"><h3>Enviar orçamento ao Financeiro</h3><p class="hint">Registre o valor e anexe o orçamento recebido do fornecedor ou prestador.</p><div class="field"><label>Valor (R$)</label><input name="amount" type="number" min="0.01" step="0.01" required /></div><div class="field"><label>Arquivo do orçamento</label><input name="quote" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,application/pdf,image/jpeg,image/png,image/webp" required /></div><button class="btn copper full" type="submit">Encaminhar para aprovação</button></form>` : ""}
       ${ticket.workflowStep === "financeiro" && user.role === "financeiro" && ticket.assigneeId === user.id ? `<form id="finance-form" class="workflow-form"><h3>Decisão do Financeiro</h3><div class="field"><label>Observação (obrigatória para rejeitar)</label><textarea name="note" placeholder="Motivo da decisão"></textarea></div><div class="filters"><button class="btn copper" type="button" data-finance-decision="approve">Aprovar</button><button class="btn secondary" type="button" data-finance-decision="reject">Rejeitar</button></div></form>` : ""}
-      ${user.role === "financeiro" && ticket.financialAssigneeId === user.id && ticket.financeDecision === "aprovado" && ["execucao", "resolvido"].includes(ticket.workflowStep) ? (() => { const expense = financeExpenses.find((item) => item.ticketId === ticket.id); return `<form id="ticket-expense-form" class="workflow-form"><h3>Gasto realizado</h3><p class="hint">Registre o valor depois que o pagamento for confirmado.</p><div class="field"><label for="expense-amount">Valor pago (R$)</label><input id="expense-amount" name="amount" type="number" min="0" step="0.01" required value="${expense ? expense.amount.toFixed(2) : ""}" /></div><div class="field"><label for="expense-paid-at">Data do pagamento</label><input id="expense-paid-at" name="paidAt" type="date" max="${dateInBookingZone()}" required value="${expense?.paidAt || dateInBookingZone()}" /></div><button class="btn copper full" type="submit">${expense ? "Atualizar gasto" : "Registrar gasto"}</button></form>`; })() : ""}
-      ${ticket.workflowStep === "execucao" && isOwner ? `<section class="workflow-form"><h3>Após a execução por Thomas</h3><p class="hint">Quando Thomas concluir o serviço, confirme para resolver o chamado.</p><button class="btn copper full" type="button" data-workflow-complete="${ticket.id}">Confirmar serviço e encerrar</button></section>` : ""}
+      ${user.role === "financeiro" && ticket.financialAssigneeId === user.id && ticket.financeDecision === "aprovado" && ["execucao", "encerrado"].includes(ticket.workflowStep) ? (() => { const expense = financeExpenses.find((item) => item.ticketId === ticket.id); return `<form id="ticket-expense-form" class="workflow-form"><h3>Gasto realizado</h3><p class="hint">Registre o valor depois que o pagamento for confirmado.</p><div class="field"><label for="expense-amount">Valor pago (R$)</label><input id="expense-amount" name="amount" type="number" min="0" step="0.01" required value="${expense ? expense.amount.toFixed(2) : ""}" /></div><div class="field"><label for="expense-paid-at">Data do pagamento</label><input id="expense-paid-at" name="paidAt" type="date" max="${dateInBookingZone()}" required value="${expense?.paidAt || dateInBookingZone()}" /></div><button class="btn copper full" type="submit">${expense ? "Atualizar gasto" : "Registrar gasto"}</button></form>`; })() : ""}
+      ${ticket.workflowStep === "execucao" && isOwner ? `<section class="workflow-form"><h3>Conclusão da execução</h3><p class="hint">Quando o serviço for concluído, confirme para encerrar o chamado.</p><button class="btn copper full" type="button" data-workflow-complete="${ticket.id}">Confirmar conclusão e encerrar</button></section>` : ""}
       ${ticket.attachments.length ? `<section class="workflow-form"><h3>Orçamentos e arquivos</h3>${ticket.attachments.map((item) => `<button class="attachment-link" type="button" data-attachment-path="${escapeHtml(item.filePath)}">${escapeHtml(item.fileName)} · ${formatDate(item.createdAt)}</button>`).join("")}</section>` : ""}
     </aside></div>`);
 }
