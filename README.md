@@ -55,6 +55,7 @@ Execute no SQL Editor do mesmo projeto, nesta ordem:
 5. [`supabase/finance-track-all-tickets.sql`](supabase/finance-track-all-tickets.sql) — permite que o Financeiro leia todos os chamados até a conclusão; não amplia as permissões de edição.
 6. [`supabase/ticket-expenses.sql`](supabase/ticket-expenses.sql) — cria o registro protegido do valor efetivamente pago e as permissões para o Financeiro responsável.
 7. [`supabase/ticket-close-status.sql`](supabase/ticket-close-status.sql) — migra os chamados concluídos para `encerrado`, atualiza as regras do fluxo e remove `resolvido` das constraints.
+8. [`supabase/ticket-multiple-quotes.sql`](supabase/ticket-multiple-quotes.sql) — permite anexar várias opções de orçamento com valores próprios e registra qual delas o Financeiro aprovou.
 
 Em um projeto já em uso, confira quais migrações foram aplicadas antes de executar arquivos novamente. O arquivo de reservas pode ser reaplicado sem apagar reservas existentes.
 
@@ -94,8 +95,8 @@ O fluxo padrão é:
 
 1. Administração ou coordenação define a pessoa responsável pelo acompanhamento e a pessoa do Financeiro.
 2. A pessoa responsável inicia o contato e obtém o orçamento.
-3. O orçamento e o valor são registrados, e o chamado segue para o Financeiro.
-4. O Financeiro aprova ou rejeita. Uma rejeição exige observação; a decisão fica no histórico e o chamado volta à pessoa responsável.
+3. A pessoa responsável adiciona um ou mais orçamentos, cada um com seu valor e PDF ou imagem; é necessário pelo menos um para encaminhar.
+4. O Financeiro compara as opções e aprova uma delas ou rejeita todas. Uma rejeição exige observação; a decisão e o valor aprovado ficam no histórico, e o chamado volta à pessoa responsável.
 5. Depois da execução, a pessoa responsável confirma a conclusão. Essa ação conclui o fluxo e marca o chamado como encerrado.
 6. O Financeiro responsável registra o valor pago e a data quando o pagamento estiver confirmado. Esse dado alimenta a área **Gastos dos chamados**, que resume os totais por categoria e mostra o valor por chamado.
 
