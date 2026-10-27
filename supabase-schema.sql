@@ -26,7 +26,7 @@ create table if not exists public.tickets (
   description text not null check (char_length(description) > 0),
   category text not null check (category in ('TI', 'Infraestrutura', 'Financeiro')),
   priority text not null default 'media' check (priority in ('baixa', 'media', 'alta', 'urgente')),
-  status text not null default 'aberto' check (status in ('aberto', 'andamento', 'aguardando', 'resolvido', 'encerrado')),
+  status text not null default 'aberto' check (status in ('aberto', 'andamento', 'aguardando', 'encerrado')),
   office_id uuid not null references public.offices(id),
   location text,
   requester_id uuid references public.profiles(id) on delete set null,
