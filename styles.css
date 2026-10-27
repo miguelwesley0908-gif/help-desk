@@ -285,6 +285,48 @@ textarea:focus {
   padding: 28px 32px 48px;
 }
 
+.back-to-top {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 1000;
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--navy);
+  color: var(--white);
+  box-shadow: var(--shadow);
+  transition: transform 160ms ease, background 160ms ease;
+}
+
+.back-to-top:hover {
+  background: var(--navy-2);
+  transform: translateY(-2px);
+}
+
+.back-to-top svg {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.back-to-top[hidden] {
+  display: none;
+}
+
+.back-to-top:focus-visible {
+  outline: 3px solid var(--gold);
+  outline-offset: 3px;
+}
+
 .topbar {
   display: flex;
   justify-content: space-between;
@@ -799,6 +841,11 @@ tr.clickable:hover {
 }
 
 @media (max-width: 640px) {
+  .back-to-top {
+    right: max(16px, env(safe-area-inset-right));
+    bottom: max(16px, env(safe-area-inset-bottom));
+  }
+
   .ticket-form-options {
     grid-template-columns: 1fr;
   }
