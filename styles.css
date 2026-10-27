@@ -485,6 +485,69 @@ tr.clickable:hover {
   margin: 0 0 10px;
 }
 
+.quote-list {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.quote-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+}
+
+.quote-choice {
+  display: flex;
+  flex: 1 1 220px;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  font-weight: 400;
+}
+
+.quote-choice input[type="radio"] {
+  width: auto;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--copper);
+}
+
+.quote-choice > span {
+  min-width: 0;
+}
+
+.quote-choice strong {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.quote-choice small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.quote-add-form {
+  margin: 14px 0;
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .workflow-action {
   margin-top: 18px;
 }
