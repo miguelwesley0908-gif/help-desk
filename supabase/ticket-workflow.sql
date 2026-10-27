@@ -13,7 +13,7 @@ alter table public.tickets add column if not exists finance_decision text not nu
 alter table public.tickets add column if not exists finance_note text not null default '';
 alter table public.tickets drop constraint if exists tickets_workflow_step_check;
 alter table public.tickets add constraint tickets_workflow_step_check
-  check (workflow_step in ('triagem', 'orcamento', 'financeiro', 'execucao', 'resolvido'));
+  check (workflow_step in ('triagem', 'orcamento', 'financeiro', 'execucao', 'encerrado'));
 alter table public.tickets drop constraint if exists tickets_finance_decision_check;
 alter table public.tickets add constraint tickets_finance_decision_check
   check (finance_decision in ('pendente', 'aprovado', 'rejeitado'));
@@ -110,9 +110,13 @@ begin
          or (new.workflow_step = 'orcamento' and (new.finance_decision <> 'rejeitado' or new.assignee_id is distinct from new.workflow_owner_id or char_length(trim(new.finance_note)) = 0)) then
         raise exception 'Registre a decisão e devolva o chamado à Andreza.';
       end if;
-    elsif old.workflow_step = 'execucao' and new.workflow_step = 'resolvido' then
+    elsif old.workflow_step = 'execucao' and new.workflow_step = 'encerrado' then
       if actor_id is distinct from old.workflow_owner_id and actor_role not in ('admin', 'coordenador') then
-        raise exception 'Somente Andreza pode confirmar a conclusão do serviço.';
+        raise exception 'Somente a pessoa responsável pelo fluxo pode confirmar a conclusão do serviço.';
+      end if;
+    elsif old.workflow_step = 'resolvido' and new.workflow_step = 'encerrado' then
+      if actor_id is not null and actor_role not in ('admin', 'coordenador') then
+        raise exception 'Somente administração ou coordenação pode normalizar um chamado concluído.';
       end if;
     else
       raise exception 'Transição de etapa inválida.';
@@ -190,7 +194,7 @@ begin
       when new.workflow_step = 'orcamento' then 'Ação necessária: orçamento'
       when new.workflow_step = 'financeiro' then 'Orçamento aguardando aprovação'
       when new.workflow_step = 'execucao' then 'Orçamento aprovado'
-      when new.workflow_step = 'resolvido' then 'Chamado resolvido'
+      when new.workflow_step = 'encerrado' then 'Chamado encerrado'
       else 'Chamado atualizado'
     end;
     message_body := 'Chamado ' || new.ticket_no || ' · ' || replace(new.workflow_step, '_', ' ');
