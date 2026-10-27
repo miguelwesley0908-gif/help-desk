@@ -22,6 +22,7 @@ const LABELS = {
 
 let db = null;
 let state = { user: null, users: [], tickets: [], rooms: [], bookings: [], busy: [], notifications: [], reservationsReady: false };
+let financeExpenses = [];
 let reservationDate = dateInBookingZone();
 let reservationDuration = 60;
 let reservationOfficeId = null;
@@ -51,6 +52,14 @@ function go(path, keepSuccess = false) {
 function now() { return new Date().toISOString(); }
 function formatDate(value) {
   return new Date(value).toLocaleString("pt-BR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+function formatMoney(value) {
+  return Number(value || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+function formatDateOnly(value) {
+  if (!value) return "—";
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day)).toLocaleDateString("pt-BR", { timeZone: "UTC" });
 }
 function bookingParts(value) {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -103,6 +112,9 @@ function checkError(result) {
 }
 
 function mapUser(row) { return { id: row.id, name: row.name, role: row.role, officeId: row.office_id }; }
+function mapTicketExpense(row) {
+  return { ticketId: row.ticket_id, amount: Number(row.amount), paidAt: row.paid_at, recordedBy: row.recorded_by };
+}
 function mapTicket(row) {
   return {
     id: row.id, number: `HD-${row.ticket_no}`, title: row.title, description: row.description,
@@ -151,6 +163,7 @@ async function loadWorkspace() {
   const { data: authData, error: authError } = await db.auth.getUser();
   if (authError) throw authError;
   if (!authData.user) {
+    financeExpenses = [];
     state = { user: null, users: [], tickets: [], rooms: [], bookings: [], busy: [], notifications: [], reservationsReady: false };
     resetReservationSession();
     render();
@@ -189,6 +202,11 @@ async function loadWorkspace() {
   }
   const loadedNotifications = checkError(notificationRows).filter((item) => !item.read_at);
   if (notificationLoadRequest === notificationRequestGeneration) state.notifications = loadedNotifications;
+  financeExpenses = [];
+  if (profile.role === "financeiro") {
+    const expenseRows = await db.from("ticket_expenses").select("ticket_id,amount,paid_at,recorded_by");
+    financeExpenses = checkError(expenseRows).map(mapTicketExpense);
+  }
   state.user = mapUser(profile);
   if (!reservationOfficeId) reservationOfficeId = state.user.officeId;
   await loadReservationData();
@@ -287,6 +305,7 @@ async function login(email, password) {
 async function logout() {
   const { error } = await db.auth.signOut();
   if (error) return showError(error);
+  financeExpenses = [];
   state = { user: null, users: [], tickets: [], rooms: [], bookings: [], busy: [], reservationsReady: false };
   resetReservationSession();
   flashError = "";
@@ -371,6 +390,26 @@ async function decideQuote(id, approved, note) {
       assignee_id: ticket.workflowOwnerId,
     }).eq("id", id).select("id").single());
     flashSuccess = approved ? "Orçamento aprovado e devolvido à Andreza para combinar o serviço." : "Orçamento rejeitado e devolvido à Andreza.";
+    await loadWorkspace();
+  } catch (error) { showError(error); }
+}
+
+async function saveTicketExpense(ticketId, amount, paidAt) {
+  const user = currentUser();
+  const ticket = state.tickets.find((item) => item.id === ticketId);
+  if (user?.role !== "financeiro" || ticket?.financialAssigneeId !== user.id || ticket.financeDecision !== "aprovado" || !["execucao", "resolvido"].includes(ticket.workflowStep)) {
+    return showError(new Error("Somente o Financeiro responsável pode registrar o gasto após a aprovação."));
+  }
+  const parsedAmount = Number(String(amount).replace(",", "."));
+  if (!Number.isFinite(parsedAmount) || parsedAmount < 0) return showError(new Error("Informe um valor pago válido, igual ou maior que zero."));
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(paidAt) || paidAt > dateInBookingZone()) return showError(new Error("Informe uma data de pagamento válida, até hoje."));
+  try {
+    const existing = financeExpenses.find((item) => item.ticketId === ticketId);
+    const result = existing
+      ? await db.from("ticket_expenses").update({ amount: parsedAmount, paid_at: paidAt, updated_at: now() }).eq("ticket_id", ticketId).select("ticket_id").single()
+      : await db.from("ticket_expenses").insert({ ticket_id: ticketId, amount: parsedAmount, paid_at: paidAt, recorded_by: user.id }).select("ticket_id").single();
+    checkError(result);
+    flashSuccess = existing ? "Gasto realizado atualizado." : "Gasto realizado registrado.";
     await loadWorkspace();
   } catch (error) { showError(error); }
 }
@@ -606,6 +645,7 @@ function layout(user, title, actions, content) {
         <button class="nav-btn ${route.name === "tickets" && !route.id ? "active" : ""}" data-go="/tickets">Chamados</button>
         <button class="nav-btn ${route.name === "new" ? "active" : ""}" data-go="/new">Abrir chamado</button>
         <button class="nav-btn ${route.name === "reservations" || route.name === "booking" ? "active" : ""}" data-go="/reservations">Reservas de salas</button>
+        ${user.role === "financeiro" ? `<button class="nav-btn ${route.name === "finance" ? "active" : ""}" data-go="/finance">Gastos dos chamados</button>` : ""}
         ${canAdminister(user) ? `<button class="nav-btn ${route.name === "users" ? "active" : ""}" data-go="/users">Equipe</button>` : ""}
         <div class="user-box"><strong>${escapeHtml(user.name)}</strong><br />${LABELS[user.role]}
           <button type="button" id="logout">Sair</button>
@@ -867,9 +907,35 @@ function renderTicket(user) {
       ${ticket.workflowStep === "triagem" && isOwner ? `<button class="btn copper full workflow-action" type="button" data-workflow-start="${ticket.id}">Iniciar contato e pedir orçamento</button>` : ""}
       ${ticket.workflowStep === "orcamento" && isOwner ? `<form id="quote-form" class="workflow-form"><h3>Enviar orçamento ao Financeiro</h3><p class="hint">Registre o valor e anexe o orçamento recebido do Thomas.</p><div class="field"><label>Valor (R$)</label><input name="amount" type="number" min="0.01" step="0.01" required /></div><div class="field"><label>Arquivo do orçamento</label><input name="quote" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,application/pdf,image/jpeg,image/png,image/webp" required /></div><button class="btn copper full" type="submit">Encaminhar para aprovação</button></form>` : ""}
       ${ticket.workflowStep === "financeiro" && user.role === "financeiro" && ticket.assigneeId === user.id ? `<form id="finance-form" class="workflow-form"><h3>Decisão do Financeiro</h3><div class="field"><label>Observação (obrigatória para rejeitar)</label><textarea name="note" placeholder="Motivo da decisão"></textarea></div><div class="filters"><button class="btn copper" type="button" data-finance-decision="approve">Aprovar</button><button class="btn secondary" type="button" data-finance-decision="reject">Rejeitar</button></div></form>` : ""}
+      ${user.role === "financeiro" && ticket.financialAssigneeId === user.id && ticket.financeDecision === "aprovado" && ["execucao", "resolvido"].includes(ticket.workflowStep) ? (() => { const expense = financeExpenses.find((item) => item.ticketId === ticket.id); return `<form id="ticket-expense-form" class="workflow-form"><h3>Gasto realizado</h3><p class="hint">Registre o valor depois que o pagamento for confirmado.</p><div class="field"><label for="expense-amount">Valor pago (R$)</label><input id="expense-amount" name="amount" type="number" min="0" step="0.01" required value="${expense ? expense.amount.toFixed(2) : ""}" /></div><div class="field"><label for="expense-paid-at">Data do pagamento</label><input id="expense-paid-at" name="paidAt" type="date" max="${dateInBookingZone()}" required value="${expense?.paidAt || dateInBookingZone()}" /></div><button class="btn copper full" type="submit">${expense ? "Atualizar gasto" : "Registrar gasto"}</button></form>`; })() : ""}
       ${ticket.workflowStep === "execucao" && isOwner ? `<section class="workflow-form"><h3>Após a execução por Thomas</h3><p class="hint">Quando Thomas concluir o serviço, confirme para resolver o chamado.</p><button class="btn copper full" type="button" data-workflow-complete="${ticket.id}">Confirmar serviço e resolver</button></section>` : ""}
       ${ticket.attachments.length ? `<section class="workflow-form"><h3>Orçamentos e arquivos</h3>${ticket.attachments.map((item) => `<button class="attachment-link" type="button" data-attachment-path="${escapeHtml(item.filePath)}">${escapeHtml(item.fileName)} · ${formatDate(item.createdAt)}</button>`).join("")}</section>` : ""}
     </aside></div>`);
+}
+
+function renderFinanceReport(user) {
+  if (user.role !== "financeiro") return layout(user, "Gastos dos chamados", "", `<div class="empty">Esta área está disponível apenas para o Financeiro.</div>`);
+  const approvedTickets = state.tickets
+    .filter((ticket) => ticket.financeDecision === "aprovado" && ticket.budgetAmount !== null && ticket.budgetAmount !== undefined)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const expenses = new Map(financeExpenses.map((item) => [item.ticketId, item]));
+  const totalPaid = approvedTickets.reduce((total, ticket) => total + (expenses.get(ticket.id)?.amount || 0), 0);
+  const registeredCount = approvedTickets.filter((ticket) => expenses.has(ticket.id)).length;
+  const pendingCount = approvedTickets.length - registeredCount;
+  const categoryRows = CATEGORIES.map((category) => {
+    const categoryTickets = approvedTickets.filter((ticket) => ticket.category === category);
+    const categoryTotal = categoryTickets.reduce((total, ticket) => total + (expenses.get(ticket.id)?.amount || 0), 0);
+    const categoryRegistered = categoryTickets.filter((ticket) => expenses.has(ticket.id)).length;
+    return `<tr><td>${escapeHtml(category)}</td><td>${formatMoney(categoryTotal)}</td><td>${categoryRegistered}</td><td>${categoryTickets.length - categoryRegistered}</td></tr>`;
+  }).join("");
+  const detailRows = approvedTickets.map((ticket) => {
+    const expense = expenses.get(ticket.id);
+    return `<tr class="clickable" data-go="/tickets/${escapeHtml(ticket.id)}"><td>${escapeHtml(ticket.number)}</td><td>${escapeHtml(ticket.title)}</td><td>${escapeHtml(ticket.category)}</td><td>${formatMoney(ticket.budgetAmount)}</td><td>${expense ? formatMoney(expense.amount) : "Não informado"}</td><td>${formatDateOnly(expense?.paidAt)}</td></tr>`;
+  }).join("");
+  return layout(user, "Gastos dos chamados", "", `
+    <section class="kpis"><article class="kpi"><span>Total efetivamente pago</span><strong>${formatMoney(totalPaid)}</strong></article><article class="kpi"><span>Chamados com pagamento informado</span><strong>${registeredCount}</strong></article><article class="kpi"><span>Aguardando registro do pagamento</span><strong>${pendingCount}</strong></article></section>
+    <section class="booking-section"><h2>Totais por categoria</h2><div class="panel table-scroll"><table><thead><tr><th>Categoria</th><th>Total pago</th><th>Pagamentos informados</th><th>Pendentes</th></tr></thead><tbody>${categoryRows}</tbody></table></div></section>
+    <section class="booking-section"><h2>Gasto por chamado</h2><p class="hint">Os valores somam somente pagamentos informados pelo Financeiro. Chamados sem valor registrado aparecem como “Não informado”.</p><div class="panel table-scroll">${detailRows ? `<table><thead><tr><th>Nº</th><th>Chamado</th><th>Categoria</th><th>Orçamento aprovado</th><th>Valor pago</th><th>Data do pagamento</th></tr></thead><tbody>${detailRows}</tbody></table>` : `<div class="empty">Ainda não há chamados com orçamento aprovado.</div>`}</div></section>`);
 }
 
 function renderUsers(user) {
@@ -1029,6 +1095,11 @@ function bind() {
     if (data.has("assigneeId")) patch.assigneeId = String(data.get("assigneeId")) || null;
     updateTicket(route.id, patch);
   });
+  const expenseForm = document.getElementById("ticket-expense-form");
+  expenseForm?.addEventListener("submit", (event) => {
+    event.preventDefault(); const data = new FormData(expenseForm);
+    saveTicketExpense(route.id, String(data.get("amount")), String(data.get("paidAt")));
+  });
   const quoteForm = document.getElementById("quote-form");
   quoteForm?.addEventListener("submit", (event) => {
     event.preventDefault(); const data = new FormData(quoteForm);
@@ -1072,6 +1143,7 @@ function render() {
   else if (route.name === "tickets" && route.id) root.innerHTML = renderTicket(user);
   else if (route.name === "tickets") root.innerHTML = renderTickets(user);
   else if (route.name === "new") root.innerHTML = renderNew(user);
+  else if (route.name === "finance") root.innerHTML = renderFinanceReport(user);
   else if (route.name === "users") root.innerHTML = renderUsers(user);
   else { go("/dashboard"); return; }
   bind();
@@ -1096,6 +1168,7 @@ async function boot() {
     else { loading = false; render(); }
     db.auth.onAuthStateChange((event) => {
       if (event === "SIGNED_OUT") {
+        financeExpenses = [];
         state = { user: null, users: [], tickets: [], rooms: [], bookings: [], busy: [], reservationsReady: false };
         resetReservationSession();
         loading = false;
