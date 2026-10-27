@@ -45,6 +45,11 @@ function parseHash() {
   return { name: parts[0] || "login", id: parts[1] || null };
 }
 
+function updateBackToTop() {
+  const button = document.getElementById("back-to-top");
+  if (button) button.hidden = window.scrollY < 320;
+}
+
 function go(path, keepSuccess = false) {
   keepSuccessOnNavigation = keepSuccess;
   location.hash = path;
@@ -658,6 +663,7 @@ function layout(user, title, actions, content) {
         ${flashSuccess ? `<p class="hint" role="status">${escapeHtml(flashSuccess)}</p>` : ""}
         ${content}
       </main>
+      <button class="back-to-top" id="back-to-top" type="button" aria-label="Voltar ao topo" title="Voltar ao topo" hidden><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6" /></svg></button>
     </div>`;
 }
 
@@ -968,6 +974,9 @@ function renderUsers(user) {
 }
 
 function bind() {
+  const backToTop = document.getElementById("back-to-top");
+  backToTop?.addEventListener("click", () => window.scrollTo({ top: 0, behavior: "smooth" }));
+  updateBackToTop();
   document.querySelectorAll("[data-notification-id]").forEach((element) => element.addEventListener("click", async () => {
     const ticketId = element.dataset.notificationTicket;
     const markedRead = await markNotificationRead(element.dataset.notificationId);
@@ -1154,6 +1163,7 @@ function render() {
   bind();
 }
 
+window.addEventListener("scroll", updateBackToTop, { passive: true });
 window.addEventListener("hashchange", () => {
   route = parseHash();
   flashError = "";
