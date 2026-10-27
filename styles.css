@@ -687,6 +687,9 @@ tr.clickable:hover {
   .shell,
   .grid-2,
   .kpis {
+    grid-template-columns: 1fr;
+  }
+
   .auth-hero {
     min-height: 280px;
     padding: 28px;
@@ -702,11 +705,23 @@ tr.clickable:hover {
     width: 100%;
   }
 
-  .booking-head { align-items: flex-start; flex-direction: column; }
-  .booking-section { padding: 16px; }
-  .slot-grid { grid-template-columns: repeat(3, 1fr); }
-}
+  .booking-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 
+  .booking-section {
+    padding: 16px;
+  }
+
+  .slot-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .new-ticket-layout {
+    grid-template-columns: 1fr;
+  }
+}
 
 .new-ticket-layout {
   display: grid;
@@ -718,6 +733,26 @@ tr.clickable:hover {
 .new-ticket-form {
   width: 100%;
   max-width: none;
+}
+
+.ticket-form-options {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.ticket-form-options .field {
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.ticket-form-options .category-field {
+  grid-column: 1 / -1;
+}
+
+.ticket-form-options select {
+  width: 100%;
+  min-width: 0;
 }
 
 .new-ticket-guide {
@@ -763,8 +798,12 @@ tr.clickable:hover {
   margin: 0;
 }
 
-@media (max-width: 980px) {
-  .new-ticket-layout {
+@media (max-width: 640px) {
+  .ticket-form-options {
     grid-template-columns: 1fr;
+  }
+
+  .ticket-form-options .category-field {
+    grid-column: auto;
   }
 }
