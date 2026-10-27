@@ -6,6 +6,7 @@ alter table public.ticket_attachments add constraint ticket_attachments_quote_am
   check (quote_amount is null or quote_amount > 0);
 alter table public.tickets add column if not exists approved_quote_attachment_id uuid
   references public.ticket_attachments(id) on delete set null;
+create index if not exists tickets_approved_quote_attachment_idx on public.tickets(approved_quote_attachment_id);
 
 -- Mantém os orçamentos existentes como a opção única previamente cadastrada.
 with ranked_quotes as (
