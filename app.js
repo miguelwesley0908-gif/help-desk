@@ -784,15 +784,27 @@ function layout(user, title, actions, content) {
   return `
     <div class="shell">
       <aside class="sidebar">
-        <div class="brand-mark" style="margin:4px 8px 22px"><img class="brand-logo" src="logo/logoRaPreta.jpeg" alt="Renan Azevedo Advogados" /></div>
-        <button class="nav-btn ${route.name === "dashboard" ? "active" : ""}" data-go="/dashboard">Painel</button>
-        <button class="nav-btn ${route.name === "tickets" && !route.id ? "active" : ""}" data-go="/tickets">Chamados</button>
-        <button class="nav-btn ${route.name === "new" ? "active" : ""}" data-go="/new">Abrir chamado</button>
-        <button class="nav-btn ${route.name === "reservations" || route.name === "booking" ? "active" : ""}" data-go="/reservations">Reservas de salas</button>
-        ${user.role === "financeiro" ? `<button class="nav-btn ${route.name === "finance" ? "active" : ""}" data-go="/finance">Gastos dos chamados</button>` : ""}
-        ${canAdminister(user) ? `<button class="nav-btn ${route.name === "users" ? "active" : ""}" data-go="/users">Equipe</button>` : ""}
-        <div class="user-box"><strong>${escapeHtml(user.name)}</strong><br />${LABELS[user.role]}
-          <button type="button" id="logout">Sair</button>
+        <div class="sidebar-top">
+          <div class="brand-mark"><img class="brand-logo" src="logo/logoRaPreta.jpeg" alt="Renan Azevedo Advogados" /></div>
+          <button class="mobile-menu-toggle" id="mobile-menu-toggle" type="button" aria-expanded="false" aria-controls="sidebar-menu">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16" /></svg><span>Menu</span>
+          </button>
+        </div>
+        <div class="sidebar-menu" id="sidebar-menu">
+          <nav class="sidebar-nav" aria-label="Navegação principal">
+            <div class="nav-group">
+              <p class="nav-group-title">Atendimento</p>
+              <button class="nav-btn ${route.name === "dashboard" ? "active" : ""}" data-go="/dashboard">Painel</button>
+              <button class="nav-btn ${route.name === "tickets" && !route.id ? "active" : ""}" data-go="/tickets">Chamados</button>
+              <button class="nav-btn ${route.name === "new" ? "active" : ""}" data-go="/new">Abrir chamado</button>
+              <button class="nav-btn ${route.name === "reservations" || route.name === "booking" ? "active" : ""}" data-go="/reservations">Reservas de salas</button>
+            </div>
+            ${user.role === "financeiro" ? `<div class="nav-group"><p class="nav-group-title">Financeiro</p><button class="nav-btn ${route.name === "finance" ? "active" : ""}" data-go="/finance">Gastos dos chamados</button></div>` : ""}
+            ${canAdminister(user) ? `<div class="nav-group"><p class="nav-group-title">Administração</p><button class="nav-btn ${route.name === "users" ? "active" : ""}" data-go="/users">Equipe</button></div>` : ""}
+          </nav>
+          <div class="user-box"><strong>${escapeHtml(user.name)}</strong><br />${LABELS[user.role]}
+            <button type="button" id="logout">Sair</button>
+          </div>
         </div>
       </aside>
       <main class="main">
@@ -1144,6 +1156,12 @@ function bind() {
   const backToTop = document.getElementById("back-to-top");
   backToTop?.addEventListener("click", () => window.scrollTo({ top: 0, behavior: "smooth" }));
   updateBackToTop();
+  document.getElementById("mobile-menu-toggle")?.addEventListener("click", (event) => {
+    const button = event.currentTarget;
+    const sidebar = button.closest(".sidebar");
+    const isOpen = sidebar.classList.toggle("menu-open");
+    button.setAttribute("aria-expanded", String(isOpen));
+  });
   document.getElementById("notification-panel")?.addEventListener("click", async (event) => {
     const element = event.target.closest("[data-notification-id]");
     if (!element) return;
