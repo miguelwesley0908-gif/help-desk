@@ -335,6 +335,16 @@ textarea:focus {
   margin-bottom: 24px;
 }
 
+.topbar-logo {
+  display: block;
+  width: 164px;
+  height: 42px;
+  margin: 0 0 4px;
+  object-fit: cover;
+  object-position: center;
+  mix-blend-mode: multiply;
+}
+
 .topbar h1 {
   font-family: Fraunces, serif;
   margin: 0;

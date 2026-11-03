@@ -796,7 +796,7 @@ function layout(user, title, actions, content) {
         </div>
       </aside>
       <main class="main">
-        <div class="topbar"><div><div class="hint" style="margin:0 0 4px">Help Desk</div><h1>${escapeHtml(title)}</h1></div><div>${actions || ""}</div></div>
+        <div class="topbar"><div><img class="topbar-logo" src="logo/logoRa.jpeg" alt="Renan Azevedo Advogados" /><h1>${escapeHtml(title)}</h1></div><div>${actions || ""}</div></div>
         <div id="notification-panel" data-connection="${notificationConnectionStatus}">${notificationMarkup()}</div>
         ${flashError ? `<p class="error" role="alert">${escapeHtml(flashError)}</p>` : ""}
         ${flashSuccess ? `<p class="hint" role="status">${escapeHtml(flashSuccess)}</p>` : ""}
