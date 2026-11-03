@@ -76,6 +76,15 @@ a {
   font-size: 13px;
 }
 
+.brand-logo {
+  display: block;
+  width: 180px;
+  height: 48px;
+  object-fit: cover;
+  object-position: center;
+  mix-blend-mode: screen;
+}
+
 .logo-tile {
   width: 36px;
   height: 36px;
@@ -333,16 +342,6 @@ textarea:focus {
   align-items: flex-end;
   gap: 16px;
   margin-bottom: 24px;
-}
-
-.topbar-logo {
-  display: block;
-  width: 164px;
-  height: 42px;
-  margin: 0 0 4px;
-  object-fit: cover;
-  object-position: center;
-  mix-blend-mode: multiply;
 }
 
 .topbar h1 {

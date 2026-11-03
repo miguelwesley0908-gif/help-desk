@@ -784,7 +784,7 @@ function layout(user, title, actions, content) {
   return `
     <div class="shell">
       <aside class="sidebar">
-        <div class="brand-mark" style="margin:4px 8px 22px"><div class="logo-tile">H</div>Hekp Gesk</div>
+        <div class="brand-mark" style="margin:4px 8px 22px"><img class="brand-logo" src="logo/logoRaPreta.jpeg" alt="Renan Azevedo Advogados" /></div>
         <button class="nav-btn ${route.name === "dashboard" ? "active" : ""}" data-go="/dashboard">Painel</button>
         <button class="nav-btn ${route.name === "tickets" && !route.id ? "active" : ""}" data-go="/tickets">Chamados</button>
         <button class="nav-btn ${route.name === "new" ? "active" : ""}" data-go="/new">Abrir chamado</button>
@@ -796,7 +796,7 @@ function layout(user, title, actions, content) {
         </div>
       </aside>
       <main class="main">
-        <div class="topbar"><div><img class="topbar-logo" src="logo/logoRa.jpeg" alt="Renan Azevedo Advogados" /><h1>${escapeHtml(title)}</h1></div><div>${actions || ""}</div></div>
+        <div class="topbar"><div><div class="hint" style="margin:0 0 4px">Help Desk</div><h1>${escapeHtml(title)}</h1></div><div>${actions || ""}</div></div>
         <div id="notification-panel" data-connection="${notificationConnectionStatus}">${notificationMarkup()}</div>
         ${flashError ? `<p class="error" role="alert">${escapeHtml(flashError)}</p>` : ""}
         ${flashSuccess ? `<p class="hint" role="status">${escapeHtml(flashSuccess)}</p>` : ""}
@@ -807,7 +807,7 @@ function layout(user, title, actions, content) {
 }
 
 function renderSetup() {
-  return `<div class="auth"><section class="auth-hero"><div class="brand-mark"><div class="logo-tile">H</div>Hekp Gesk</div><div><h1>Seu help desk, compartilhado pela equipe.</h1><p>Conecte o projeto ao Supabase para habilitar autenticação e dados compartilhados.</p></div></section>
+  return `<div class="auth"><section class="auth-hero"><div class="brand-mark"><img class="brand-logo" src="logo/logoRaPreta.jpeg" alt="Renan Azevedo Advogados" /></div><div><h1>Seu help desk, compartilhado pela equipe.</h1><p>Conecte o projeto ao Supabase para habilitar autenticação e dados compartilhados.</p></div></section>
     <section class="auth-panel"><div class="card"><h2>Falta configurar a conexão</h2><p class="hint">Abra <b>config.js</b> e informe a URL do projeto Supabase e a chave publicável. Depois siga o README para criar as tabelas e o primeiro usuário administrador.</p><p class="hint">Use somente a chave publicável no navegador. Nunca coloque uma chave secreta ou service_role neste arquivo.</p></div></section></div>`;
 }
 
@@ -816,7 +816,7 @@ function renderLoading() {
 }
 
 function renderLogin() {
-  return `<div class="auth"><section class="auth-hero"><div class="brand-mark"><div class="logo-tile">H</div>Hekp Gesk</div><div><h1>Uma recepção digital para sua equipe.</h1><p>Abra chamados, acompanhe o fluxo de atendimento e receba atualizações em um só lugar.</p></div><div class="hero-meta"><span>Fila compartilhada</span><span>Histórico do chamado</span><span>Acesso por perfil</span></div></section>
+  return `<div class="auth"><section class="auth-hero"><div class="brand-mark"><img class="brand-logo" src="logo/logoRaPreta.jpeg" alt="Renan Azevedo Advogados" /></div><div><h1>Uma recepção digital para sua equipe.</h1><p>Abra chamados, acompanhe o fluxo de atendimento e receba atualizações em um só lugar.</p></div><div class="hero-meta"><span>Fila compartilhada</span><span>Histórico do chamado</span><span>Acesso por perfil</span></div></section>
     <section class="auth-panel"><form class="card" id="login-form"><h2>Entrar</h2><p class="hint">Use o e-mail e a senha fornecidos pelo administrador.</p>
       ${flashError ? `<p class="error" role="alert">${escapeHtml(flashError)}</p>` : ""}
       ${flashSuccess ? `<p class="hint" role="status">${escapeHtml(flashSuccess)}</p>` : ""}
