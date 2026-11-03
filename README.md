@@ -26,3 +26,7 @@ A abordagem de desenvolvimento é incremental: funcionalidades são construídas
 - **Supabase Edge Functions** executa operações que devem permanecer no servidor.
 - **Cloudflare Workers** hospeda a aplicação web.
 
+### Notificações em tempo real
+
+Para habilitar as notificações em tempo real, execute `supabase/notifications-realtime.sql` no SQL Editor do Supabase. O script adiciona `public.notifications` à publicação `supabase_realtime` quando necessário e não altera as políticas RLS. Se a publicação não existir, habilite a tabela `public.notifications` em **Database → Publications → supabase_realtime** no Dashboard.
+

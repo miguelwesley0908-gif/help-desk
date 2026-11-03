@@ -33,6 +33,14 @@ let selectedSlot = null;
 let availabilityRequest = 0;
 let notificationPoll = null;
 let notificationRequestGeneration = 0;
+let notificationChannel = null;
+let notificationChannelUserId = null;
+let notificationChannelGeneration = 0;
+let notificationConnectionStatus = "disconnected";
+let authSessionUserId = null;
+let authSessionGeneration = 0;
+let authBootstrapping = true;
+let suppressAuthWorkspaceSync = false;
 let route = parseHash();
 let flashError = "";
 let flashSuccess = "";
@@ -134,16 +142,102 @@ function mapTicket(row) {
   };
 }
 
-async function refreshNotifications() {
-  if (!state.user || !db) return;
+function notificationMarkup() {
+  const unreadNotifications = (state.notifications || []).filter((item) => !item.read_at);
+  if (!unreadNotifications.length) return "";
+  return `<section class="notification-panel"><strong>Notificações · ${unreadNotifications.length} nova(s)</strong><div>${unreadNotifications.slice(0, 5).map((item) => `<button class="notification-item ${item.read_at ? "" : "unread"}" type="button" data-notification-id="${escapeHtml(item.id)}" data-notification-ticket="${escapeHtml(item.ticket_id)}"><span>${escapeHtml(item.title)}</span><small>${escapeHtml(item.body)} · ${formatDate(item.created_at)}</small></button>`).join("")}</div></section>`;
+}
+
+function updateNotificationUI() {
+  const panel = document.getElementById("notification-panel");
+  if (panel) panel.innerHTML = notificationMarkup();
+}
+
+async function refreshNotifications(expectedUserId = state.user?.id) {
+  if (!expectedUserId || !db || state.user?.id !== expectedUserId) return;
   const requestGeneration = ++notificationRequestGeneration;
-  const result = await db.from("notifications").select("id,ticket_id,title,body,created_at,read_at").is("read_at", null).order("created_at", { ascending: false }).limit(30);
-  if (result.error || requestGeneration !== notificationRequestGeneration) return;
+  const result = await db.from("notifications").select("id,ticket_id,title,body,created_at,read_at").eq("recipient_id", expectedUserId).is("read_at", null).order("created_at", { ascending: false }).limit(30);
+  if (result.error || requestGeneration !== notificationRequestGeneration || state.user?.id !== expectedUserId) return;
   const next = (result.data || []).filter((item) => !item.read_at);
   if (JSON.stringify(next) !== JSON.stringify(state.notifications || [])) {
     state.notifications = next;
-    render();
+    updateNotificationUI();
   }
+}
+
+function removeNotificationSubscription() {
+  notificationChannelGeneration += 1;
+  const channel = notificationChannel;
+  notificationChannel = null;
+  notificationChannelUserId = null;
+  notificationConnectionStatus = "disconnected";
+  if (channel && db) {
+    try {
+      const removal = db.removeChannel(channel);
+      if (removal?.catch) removal.catch(() => {});
+    } catch { /* The local subscription is already detached. */ }
+  }
+}
+
+function subscribeToNotifications(userId) {
+  if (!db || !userId || state.user?.id !== userId) return;
+  if (notificationChannel && notificationChannelUserId === userId) return;
+  removeNotificationSubscription();
+
+  const generation = notificationChannelGeneration;
+  const channel = db.channel(`notifications:${userId}`)
+    .on("postgres_changes", {
+      event: "*",
+      schema: "public",
+      table: "notifications",
+      filter: `recipient_id=eq.${userId}`,
+    }, () => { void refreshNotifications(userId); });
+  notificationChannel = channel;
+  notificationChannelUserId = userId;
+  notificationConnectionStatus = "connecting";
+  channel.subscribe((status) => {
+      if (generation !== notificationChannelGeneration || notificationChannel !== channel) return;
+      notificationConnectionStatus = status === "SUBSCRIBED" ? "connected" : "disconnected";
+      const panel = document.getElementById("notification-panel");
+      if (panel) panel.dataset.connection = notificationConnectionStatus;
+      // Supabase-js v2 retries interrupted channels; every successful join also
+      // reconciles the list so events missed while offline are recovered.
+      if (status === "SUBSCRIBED") void refreshNotifications(userId);
+    });
+}
+
+function clearAuthenticatedState() {
+  removeNotificationSubscription();
+  notificationRequestGeneration += 1;
+  financeExpenses = [];
+  state = { user: null, users: [], tickets: [], rooms: [], bookings: [], busy: [], notifications: [], reservationsReady: false };
+  resetReservationSession();
+  loading = false;
+  render();
+}
+
+function handleAuthStateChange(event, session) {
+  const nextUserId = session?.user?.id || null;
+  const previousUserId = authSessionUserId;
+  authSessionUserId = nextUserId;
+  if (authBootstrapping && event === "INITIAL_SESSION") return;
+  if (event === "SIGNED_OUT" || !nextUserId) {
+    authSessionGeneration += 1;
+    clearAuthenticatedState();
+    return;
+  }
+  if (previousUserId && previousUserId !== nextUserId) {
+    authSessionGeneration += 1;
+    clearAuthenticatedState();
+  }
+  if (authBootstrapping || suppressAuthWorkspaceSync || previousUserId === nextUserId || state.user?.id === nextUserId) return;
+  authSessionGeneration += 1;
+  loading = true;
+  render();
+  queueMicrotask(() => {
+    if (authSessionUserId !== nextUserId) return;
+    loadWorkspace(nextUserId).catch(showError);
+  });
 }
 function mapRoom(row) {
   return { id: row.id, officeId: row.office_id, name: row.name, capacity: row.capacity, active: row.active };
@@ -164,14 +258,13 @@ function resetReservationSession() {
   availabilityRequest += 1;
 }
 
-async function loadWorkspace() {
+async function loadWorkspace(expectedUserId = null) {
   const { data: authData, error: authError } = await db.auth.getUser();
   if (authError) throw authError;
+  const sessionGeneration = authSessionGeneration;
+  if (expectedUserId && authData.user?.id !== expectedUserId) return;
   if (!authData.user) {
-    financeExpenses = [];
-    state = { user: null, users: [], tickets: [], rooms: [], bookings: [], busy: [], notifications: [], reservationsReady: false };
-    resetReservationSession();
-    render();
+    clearAuthenticatedState();
     return;
   }
 
@@ -181,6 +274,7 @@ async function loadWorkspace() {
     await db.auth.signOut();
     throw new Error("Sua conta foi autenticada, mas ainda não tem perfil cadastrado. Peça ao administrador para concluir seu acesso.");
   }
+  if (sessionGeneration !== authSessionGeneration || (expectedUserId && authSessionUserId !== expectedUserId)) return;
   const profile = profileResult.data;
   const notificationLoadRequest = ++notificationRequestGeneration;
   const [userRows, ticketRows, commentRows, eventRows, attachmentRows, notificationRows] = await Promise.all([
@@ -189,8 +283,9 @@ async function loadWorkspace() {
     db.from("ticket_comments").select("id,ticket_id,author_id,body,created_at").order("created_at"),
     db.from("ticket_events").select("id,ticket_id,actor_id,body,created_at").order("created_at"),
     db.from("ticket_attachments").select("id,ticket_id,file_name,file_path,mime_type,file_size,quote_amount,created_at,uploader_id").order("created_at"),
-    db.from("notifications").select("id,ticket_id,title,body,created_at,read_at").is("read_at", null).order("created_at", { ascending: false }).limit(30),
+    db.from("notifications").select("id,ticket_id,title,body,created_at,read_at").eq("recipient_id", authData.user.id).is("read_at", null).order("created_at", { ascending: false }).limit(30),
   ]);
+  if (sessionGeneration !== authSessionGeneration || (expectedUserId && authSessionUserId !== expectedUserId)) return;
   state.users = checkError(userRows).map(mapUser);
   state.tickets = checkError(ticketRows).map(mapTicket);
   for (const row of checkError(commentRows)) {
@@ -213,6 +308,8 @@ async function loadWorkspace() {
     financeExpenses = checkError(expenseRows).map(mapTicketExpense);
   }
   state.user = mapUser(profile);
+  if (state.user.id !== authSessionUserId && authSessionUserId) return;
+  subscribeToNotifications(state.user.id);
   if (!reservationOfficeId) reservationOfficeId = state.user.officeId;
   await loadReservationData();
   loading = false;
@@ -287,10 +384,12 @@ function showError(error) {
 
 async function login(email, password) {
   flashError = "";
+  suppressAuthWorkspaceSync = true;
   try {
     const result = await db.auth.signInWithPassword({ email: email.trim(), password });
     if (result.error) throw result.error;
   } catch (error) {
+    suppressAuthWorkspaceSync = false;
     const message = error?.message || "Não foi possível concluir a autenticação.";
     showError(new Error(`Falha ao autenticar no Supabase: ${message}`));
     return;
@@ -299,10 +398,12 @@ async function login(email, password) {
   try {
     await loadWorkspace();
   } catch (error) {
+    suppressAuthWorkspaceSync = false;
     const message = error?.message || "Não foi possível carregar os dados do sistema.";
     showError(new Error(`Autenticação concluída, mas falhou ao carregar os dados do Help Desk: ${message}`));
     return;
   }
+  suppressAuthWorkspaceSync = false;
 
   if (state.user) go("/dashboard");
 }
@@ -310,9 +411,9 @@ async function login(email, password) {
 async function logout() {
   const { error } = await db.auth.signOut();
   if (error) return showError(error);
-  financeExpenses = [];
-  state = { user: null, users: [], tickets: [], rooms: [], bookings: [], busy: [], reservationsReady: false };
-  resetReservationSession();
+  authSessionUserId = null;
+  authSessionGeneration += 1;
+  clearAuthenticatedState();
   flashError = "";
   go("/login");
   render();
@@ -488,7 +589,7 @@ async function markNotificationRead(id) {
     }
     notificationRequestGeneration++;
     state.notifications = state.notifications.filter((item) => item.id !== id);
-    render();
+    updateNotificationUI();
     return true;
   } catch (error) {
     notificationRequestGeneration++;
@@ -680,7 +781,6 @@ function badgeStatus(status) { return `<span class="badge st-${escapeHtml(status
 function badgePriority(priority) { return `<span class="badge pr-${escapeHtml(priority)}">${LABELS[priority] || escapeHtml(priority)}</span>`; }
 
 function layout(user, title, actions, content) {
-  const unreadNotifications = (state.notifications || []).filter((item) => !item.read_at);
   return `
     <div class="shell">
       <aside class="sidebar">
@@ -697,7 +797,7 @@ function layout(user, title, actions, content) {
       </aside>
       <main class="main">
         <div class="topbar"><div><div class="hint" style="margin:0 0 4px">Help Desk</div><h1>${escapeHtml(title)}</h1></div><div>${actions || ""}</div></div>
-        ${unreadNotifications.length ? `<section class="notification-panel"><strong>Notificações${unreadNotifications.length ? ` · ${unreadNotifications.length} nova(s)` : ""}</strong><div>${unreadNotifications.slice(0, 5).map((item) => `<button class="notification-item ${item.read_at ? "" : "unread"}" type="button" data-notification-id="${escapeHtml(item.id)}" data-notification-ticket="${escapeHtml(item.ticket_id)}"><span>${escapeHtml(item.title)}</span><small>${escapeHtml(item.body)} · ${formatDate(item.created_at)}</small></button>`).join("")}</div></section>` : ""}
+        <div id="notification-panel" data-connection="${notificationConnectionStatus}">${notificationMarkup()}</div>
         ${flashError ? `<p class="error" role="alert">${escapeHtml(flashError)}</p>` : ""}
         ${flashSuccess ? `<p class="hint" role="status">${escapeHtml(flashSuccess)}</p>` : ""}
         ${content}
@@ -1044,11 +1144,13 @@ function bind() {
   const backToTop = document.getElementById("back-to-top");
   backToTop?.addEventListener("click", () => window.scrollTo({ top: 0, behavior: "smooth" }));
   updateBackToTop();
-  document.querySelectorAll("[data-notification-id]").forEach((element) => element.addEventListener("click", async () => {
+  document.getElementById("notification-panel")?.addEventListener("click", async (event) => {
+    const element = event.target.closest("[data-notification-id]");
+    if (!element) return;
     const ticketId = element.dataset.notificationTicket;
     const markedRead = await markNotificationRead(element.dataset.notificationId);
     if (markedRead && ticketId) go(`/tickets/${ticketId}`);
-  }));
+  });
   document.querySelectorAll("[data-delete-ticket]").forEach((element) => element.addEventListener("click", (event) => {
     event.stopPropagation();
     const ticket = state.tickets.find((item) => item.id === element.dataset.deleteTicket);
@@ -1241,25 +1343,23 @@ window.addEventListener("hashchange", () => {
   render();
 });
 
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") void refreshNotifications();
+});
+
 async function boot() {
   if (!window.supabase || !window.HEKP_SUPABASE?.url || !window.HEKP_SUPABASE?.publishableKey) { loading = false; render(); return; }
   try {
     db = window.supabase.createClient(window.HEKP_SUPABASE.url, window.HEKP_SUPABASE.publishableKey);
     if (!notificationPoll) notificationPoll = window.setInterval(refreshNotifications, 30000);
+    db.auth.onAuthStateChange((event, session) => handleAuthStateChange(event, session));
     const { data, error } = await db.auth.getSession();
     if (error) throw error;
-    if (data.session) await loadWorkspace();
+    authSessionUserId = data.session?.user?.id || null;
+    authBootstrapping = false;
+    if (data.session) await loadWorkspace(data.session.user.id);
     else { loading = false; render(); }
-    db.auth.onAuthStateChange((event) => {
-      if (event === "SIGNED_OUT") {
-        financeExpenses = [];
-        state = { user: null, users: [], tickets: [], rooms: [], bookings: [], busy: [], reservationsReady: false };
-        resetReservationSession();
-        loading = false;
-        render();
-      }
-    });
-  } catch (error) { showError(error); }
+  } catch (error) { authBootstrapping = false; showError(error); }
 }
 
 render();

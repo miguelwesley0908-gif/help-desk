@@ -6,9 +6,13 @@ const vm = require('node:vm');
 
 function appContext() {
   const root = { innerHTML: '' };
+  const notificationPanel = { innerHTML: '', dataset: {}, addEventListener() {} };
   const context = vm.createContext({
     window: { addEventListener() {} },
-    document: { getElementById: () => root },
+    document: {
+      getElementById: (id) => id === 'notification-panel' ? notificationPanel : root,
+      addEventListener() {},
+    },
     location: { search: '', hash: '#/login' },
     URLSearchParams,
     Intl,
@@ -16,6 +20,8 @@ function appContext() {
     console,
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8'), context);
+  context.notificationPanel = notificationPanel;
+  context.root = root;
   return context;
 }
 
@@ -80,4 +86,81 @@ test('login reports authentication failures separately from workspace loading fa
   `, workspaceFailure);
   await vm.runInContext('login("user@example.com", "password")', workspaceFailure);
   assert.match(vm.runInContext('flashError', workspaceFailure), /Autenticação concluída, mas falhou ao carregar os dados do Help Desk: Failed to fetch/);
+});
+
+test('notification subscription is user-filtered, refreshes from the database, and recovers on reconnect without rerendering the page', async () => {
+  const app = appContext();
+  const received = [];
+  const row = { id: 'n-1', ticket_id: 't-1', title: 'Novo aviso', body: 'Acompanhe o chamado', created_at: '2026-11-03T12:00:00Z', read_at: null };
+  let subscribeCallback;
+  let queryCount = 0;
+  let channelCount = 0;
+  const channel = {
+    on(event, config, callback) { received.push({ event, config }); this.eventCallback = callback; return this; },
+    subscribe(callback) { subscribeCallback = callback; return this; },
+  };
+  const query = {
+    select() { return this; },
+    eq(column, value) { received.push({ column, value }); return this; },
+    is() { return this; },
+    order() { return this; },
+    limit() { return this; },
+    then(resolve) { queryCount += 1; resolve({ data: [row], error: null }); },
+  };
+  vm.runInContext(`
+    state.user = {id: 'user-a'};
+    db = {
+      channel: () => { channelCount += 1; return channel; },
+      removeChannel: () => Promise.resolve('ok'),
+      from: () => query,
+    };
+  `, app);
+  app.channel = channel;
+  app.query = query;
+  app.channelCount = 0;
+  vm.runInContext(`db.channel = () => { channelCount += 1; return channel;}`, app);
+
+  vm.runInContext(`subscribeToNotifications('user-a'); subscribeToNotifications('user-a');`, app);
+  assert.equal(vm.runInContext('channelCount', app), 1);
+  assert.equal(received[0].event, 'postgres_changes');
+  assert.deepEqual({ ...received[0].config }, {
+    event: '*', schema: 'public', table: 'notifications', filter: 'recipient_id=eq.user-a',
+  });
+  const pageBefore = app.root.innerHTML;
+
+  subscribeCallback('SUBSCRIBED');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(queryCount, 1);
+  assert.equal(received.some((item) => item.column === 'recipient_id' && item.value === 'user-a'), true);
+  assert.match(app.notificationPanel.innerHTML, /Novo aviso/);
+  assert.equal(app.root.innerHTML, pageBefore);
+
+  channel.eventCallback({ new: { id: 'untrusted-event-payload' } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(queryCount, 2);
+
+  subscribeCallback('CHANNEL_ERROR');
+  subscribeCallback('SUBSCRIBED');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(queryCount, 3);
+});
+
+test('notification subscription is removed when the authenticated user changes or signs out', () => {
+  const app = appContext();
+  let removed = 0;
+  const channel = { on() { return this; }, subscribe() { return this; } };
+  app.channel = channel;
+  app.removed = 0;
+  vm.runInContext(`
+    state.user = {id: 'user-a'};
+    authSessionUserId = 'user-a';
+    db = { channel: () => channel, removeChannel: () => { removed += 1; return Promise.resolve('ok'); } };
+    suppressAuthWorkspaceSync = true;
+    subscribeToNotifications('user-a');
+    handleAuthStateChange('SIGNED_IN', {user: {id: 'user-b'}});
+  `, app);
+  assert.equal(vm.runInContext('removed', app), 1);
+  assert.equal(vm.runInContext('notificationChannel', app), null);
+  vm.runInContext(`handleAuthStateChange('SIGNED_OUT', null);`, app);
+  assert.equal(vm.runInContext('state.user', app), null);
 });
